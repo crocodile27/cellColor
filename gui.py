@@ -8,7 +8,7 @@ from qtpy.QtGui import QImage, QPixmap, QColor
 from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDialog,
                             QMenuBar, QAction, QStatusBar, QProgressBar, QToolBar,
                             QComboBox, QHBoxLayout, QPushButton, QScrollArea,
-                            QFrame, QColorDialog)
+                            QFrame, QColorDialog, QSlider)
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
 import cv2
@@ -17,8 +17,50 @@ height = root.winfo_screenheight() - root.winfo_screenmmheight()
 width = root.winfo_screenwidth()
 print("Width, height of screen: ", width, height)
 
+class GridLabel(QLabel):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.parent = parent
+            self.grid_size = 1
+            self.selected_cell = None
+            self.setMouseTracking(True)
 
+        def mousePressEvent(self, event):
+            if not hasattr(self.parent, 'resized_image') or self.parent.resized_image is None:
+                return
 
+            pos = event.pos()
+            pixmap = self.pixmap()
+            if pixmap:
+                width = pixmap.width()
+                height = pixmap.height()
+                cell_width = width / self.grid_size
+                cell_height = height / self.grid_size
+                
+                # Calculate label dimensions and position
+                label_rect = self.rect()
+                label_width = label_rect.width()
+                label_height = label_rect.height()
+                
+                # Calculate pixmap position within label (due to alignment)
+                pixmap_x = (label_width - width) / 2 if width < label_width else 0
+                pixmap_y = (label_height - height) / 2 if height < label_height else 0
+                
+                # Adjust coordinates relative to pixmap position
+                adjusted_x = pos.x() - pixmap_x
+                adjusted_y = pos.y() - pixmap_y
+                
+                # Ensure adjusted coordinates are within pixmap boundaries
+                adjusted_x = max(0, min(width-1, adjusted_x))
+                adjusted_y = max(0, min(height-1, adjusted_y))
+                
+                # Calculate which cell was clicked
+                row = int(adjusted_y / cell_height)
+                col = int(adjusted_x / cell_width)
+
+                self.selected_cell = (row, col)
+                self.parent.update_grid_overlay()
+            
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -26,6 +68,7 @@ class MainWindow(QMainWindow):
         self.setGeometry(0, 0, width, height)
         self.screenWidth = width
         self.screenHeight = height
+        
         # Central Widget
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -35,8 +78,8 @@ class MainWindow(QMainWindow):
         self.image_area = QWidget()
         self.image_layout = QVBoxLayout(self.image_area)
 
-        # Image Label
-        self.image_label = QLabel("Upload an image to start")
+        # Custom Image Label with Grid Support
+        self.image_label = GridLabel(self)
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_layout.addWidget(self.image_label)
 
@@ -49,12 +92,37 @@ class MainWindow(QMainWindow):
         self.toolbar_area = QWidget()
         self.toolbar_layout = QVBoxLayout(self.toolbar_area)
 
+        # Grid Size Slider
+        self.grid_slider_label = QLabel("Grid Size: 1x1")
+        self.toolbar_layout.addWidget(self.grid_slider_label)
+        
+        self.grid_slider = QSlider(Qt.Horizontal)
+        self.grid_slider.setMinimum(1)
+        self.grid_slider.setMaximum(10)
+        self.grid_slider.setValue(1)
+        self.grid_slider.setTickPosition(QSlider.TicksBelow)
+        self.grid_slider.setTickInterval(1)
+        self.grid_slider.valueChanged.connect(self.update_grid_size)
+        self.toolbar_layout.addWidget(self.grid_slider)
+
+        # Confirm Zoom Button
+        self.zoom_button = QPushButton("Confirm Zoom")
+        self.zoom_button.clicked.connect(self.zoom_to_selection)
+        self.zoom_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.zoom_button)
+
+        # Reset Zoom Button
+        self.reset_zoom_button = QPushButton("Reset Zoom")
+        self.reset_zoom_button.clicked.connect(self.reset_zoom)
+        self.reset_zoom_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.reset_zoom_button)
+
         # Gene Selection Dropdown
         self.gene_dropdown = QComboBox()
-        # self.gene_dropdown.setPlaceholderText("Select a Gene") #don't think this works because declared before added?
+        self.gene_dropdown.setPlaceholderText("Select a Gene")
         self.gene_dropdown.currentTextChanged.connect(self.on_gene_selected)
         self.toolbar_layout.addWidget(self.gene_dropdown)
-        self.gene_dropdown.setPlaceholderText("Select a Gene")
+        self.gene_dropdown.setSizeAdjustPolicy(2)
 
         # Selected Genes Scroll Area
         self.selected_genes_scroll = QScrollArea()
@@ -77,18 +145,13 @@ class MainWindow(QMainWindow):
         self.load_image_action.triggered.connect(self.load_image)
         self.file_menu.addAction(self.load_image_action)
 
-        # Load Detected Transcripts Action
-        self.load_detected_transcripts_action = QAction(
-            "Load Detected Transcripts", self)
-        self.load_detected_transcripts_action.triggered.connect(
-            self.load_detected_transcripts)
+        # Other menu items...
+        self.load_detected_transcripts_action = QAction("Load Detected Transcripts", self)
+        self.load_detected_transcripts_action.triggered.connect(self.load_detected_transcripts)
         self.file_menu.addAction(self.load_detected_transcripts_action)
 
-        # Load Transformation Matrix Action
-        self.load_transformation_matrix_action = QAction(
-            "Load Transformation Matrix", self)
-        self.load_transformation_matrix_action.triggered.connect(
-            self.load_transformation_matrix)
+        self.load_transformation_matrix_action = QAction("Load Transformation Matrix", self)
+        self.load_transformation_matrix_action.triggered.connect(self.load_transformation_matrix)
         self.file_menu.addAction(self.load_transformation_matrix_action)
 
         # Status Bar
@@ -97,11 +160,138 @@ class MainWindow(QMainWindow):
 
         # Data Storage
         self.image = None
+        self.original_image = None  # Store the original image for reset functionality
         self.gene_data = None
         self.transformation_matrix = None
         self.resized_image = None
-        self.selected_genes = {}  # Dictionary to store selected genes and their colors
+        self.selected_genes = {}
 
+    
+    def update_grid_size(self):
+        size = self.grid_slider.value()
+        self.grid_slider_label.setText(f"Grid Size: {size}x{size}")
+        self.image_label.grid_size = size
+        self.image_label.selected_cell = None
+        self.zoom_button.setEnabled(False)
+        self.update_grid_overlay()
+    def update_grid_overlay(self):
+        if self.resized_image is None:
+            return
+
+        overlay_image = self.resized_image.copy()
+        height, width = overlay_image.shape[:2]
+        grid_size = self.image_label.grid_size
+
+        # Draw grid lines
+        cell_height = height / grid_size
+        cell_width = width / grid_size
+
+        # Draw horizontal lines
+        for i in range(1, grid_size):
+            y = int(i * cell_height)
+            cv2.line(overlay_image, (0, y), (width, y), (255, 255, 255), 1)
+
+        # Draw vertical lines
+        for i in range(1, grid_size):
+            x = int(i * cell_width)
+            cv2.line(overlay_image, (x, 0), (x, height), (255, 255, 255), 1)
+
+        # Highlight selected cell
+        if self.image_label.selected_cell is not None:
+            row, col = self.image_label.selected_cell
+            x1 = int(col * cell_width)
+            y1 = int(row * cell_height)
+            x2 = int((col + 1) * cell_width)
+            y2 = int((row + 1) * cell_height)
+            
+            overlay = overlay_image.copy()
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), -1)
+            cv2.addWeighted(overlay, 0.3, overlay_image, 0.7, 0, overlay_image)
+            self.zoom_button.setEnabled(True)
+
+        # Convert and display the image
+        overlay_image_rgb = cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
+        height, width, channel = overlay_image_rgb.shape
+        bytes_per_line = 3 * width
+        q_img = QImage(overlay_image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.image_label.setPixmap(QPixmap.fromImage(q_img))
+
+    def zoom_to_selection(self):
+        if self.image_label.selected_cell is None or self.resized_image is None or self.original_image is None:
+            return
+
+        row, col = self.image_label.selected_cell
+        grid_size = self.image_label.grid_size
+
+        # Calculate the region to zoom into in the resized image coordinates
+        resized_height, resized_width = self.resized_image.shape[:2]
+        cell_height = resized_height / grid_size
+        cell_width = resized_width / grid_size
+
+        # Calculate the proportion of the cell in the resized image
+        y_prop_start = row / grid_size
+        x_prop_start = col / grid_size
+        y_prop_end = (row + 1) / grid_size
+        x_prop_end = (col + 1) / grid_size
+
+        # Calculate the corresponding region in the original image
+        orig_height, orig_width = self.original_image.shape[:2]
+        orig_y1 = int(y_prop_start * orig_height)
+        orig_x1 = int(x_prop_start * orig_width)
+        orig_y2 = int(y_prop_end * orig_height)
+        orig_x2 = int(x_prop_end * orig_width)
+
+        # Extract the region from the original high-resolution image
+        selected_region = self.original_image[orig_y1:orig_y2, orig_x1:orig_x2]
+        
+        # Determine the appropriate scale factor to fit the region to the display
+        scale_factor = self.screenHeight / selected_region.shape[0]
+        
+        # Resize the selected region directly from the original image
+        self.resized_image = cv2.resize(
+            selected_region, (0, 0),
+            fx=scale_factor,
+            fy=scale_factor,
+            interpolation=cv2.INTER_LINEAR
+        )
+
+        # Store zoom information for gene overlay calculations
+        self.current_zoom = {
+            'x_start': orig_x1,
+            'y_start': orig_y1,
+            'x_end': orig_x2,
+            'y_end': orig_y2,
+            'scale_factor': scale_factor
+        }
+
+        # Update UI state
+        self.image_label.selected_cell = None
+        self.zoom_button.setEnabled(False)
+        self.reset_zoom_button.setEnabled(True)
+        self.update_grid_overlay()
+
+        # Overlay genes if data is available
+        if self.gene_data is not None:
+            self.overlay_genes()
+
+    def reset_zoom(self):
+        if self.original_image is not None:
+            # Restore the original resized image with proper scaling
+            scale_factor = self.screenHeight / self.original_image.shape[0]
+            self.resized_image = cv2.resize(
+                self.original_image, (0, 0), 
+                fx=scale_factor, 
+                fy=scale_factor
+            )
+            # Clear zoom state
+            self.current_zoom = None
+            
+            self.reset_zoom_button.setEnabled(False)
+            self.update_grid_overlay()
+            
+            if self.gene_data is not None:
+                self.overlay_genes()
+                
     def load_transformation_matrix(self):
         file_name, _ = QFileDialog.getOpenFileName(
             self, "Open CSV File", "", "CSV Files (*.csv)")
@@ -118,7 +308,16 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 "Loading Detected Transcripts...(this may take a while)")
             QTimer.singleShot(0, lambda: self.process_csv(file_name))
-
+    '''
+    process_csv:
+    This takes in the transformation function and the gene transcript data and stores it.
+    Variables Changed:
+    self.transformation matrix,
+    self.gene_data
+    self.gene_dropdown
+    
+    Then calls the overlay_genes function
+    '''
     def process_csv(self, file_name):
         try:
             if "transform" in file_name.lower():
@@ -193,7 +392,8 @@ class MainWindow(QMainWindow):
 
     def remove_gene_selection(self, gene):
         # Remove from selected genes
-        del self.selected_genes[gene]
+        if gene in self.selected_genes:
+            del self.selected_genes[gene]
 
         # Remove widget from layout
         for i in range(self.selected_genes_layout.count()):
@@ -215,45 +415,106 @@ class MainWindow(QMainWindow):
             # Ensure color is not already used
             if color not in self.selected_genes.values():
                 return color
+    '''
+    overlay_genes:
+    This function should create a copy of the resized image and draw dots on the matrix for the genes that were selected.
 
+    '''
     def overlay_genes(self):
-        if self.gene_data is not None and self.image is not None and self.resized_image is not None:
-            # Create a copy of the resized image to draw on
-            overlay_image = self.resized_image.copy()
-
-            for _, row in self.gene_data.iterrows():
-                x, y, gene = row['global_x'], row['global_y'], row['gene']
-
-                # Check if this gene is selected
-                if gene in self.selected_genes:
-                    if self.transformation_matrix is not None:
-                        # Apply transformation matrix to coordinates
-                        coords = np.dot(self.transformation_matrix, [x, y, 1])
-                        x, y = coords[0], coords[1]
-                    else:
-                        print(
-                            "There is no transformation matrix. Please load a transformation matrix.")
-                        return
-
-                    # Scale coordinates to match resized image
-                    x, y = int(x * self.screenHeight/(self.image.shape[0])), int(y * self.screenHeight/(self.image.shape[0]))
-
-                    # Get color for this gene
-                    color = self.selected_genes[gene]
-
-                    # Draw circle on the image
-                    cv2.circle(overlay_image, (x, y), 0.1, color, -1)
-
-            # Convert and display the image
-            overlay_image_rgb = cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
-            height, width, channel = overlay_image_rgb.shape
-            bytes_per_line = 3 * width
-            q_img = QImage(overlay_image_rgb.data, width, height,
-                           bytes_per_line, QImage.Format_RGB888)
-            self.image_label.setPixmap(QPixmap.fromImage(q_img))
-        else:
+        if self.gene_data is None or self.image is None or self.resized_image is None:
             print("Please make sure to upload the detected transcripts")
-        return
+            return
+
+        # Create a copy of the resized image to draw on
+        overlay_image = self.resized_image.copy()
+
+        # Filter out only selected genes to make it faster
+        selected_gene_mask = self.gene_data["gene"].isin(self.selected_genes)
+        filtered_data = self.gene_data[selected_gene_mask]
+
+        if filtered_data.empty:
+            print("No selected genes to overlay.")
+            return
+
+        # Extract coordinates and genes
+        coords = filtered_data[["global_x", "global_y"]].to_numpy()
+        genes = filtered_data["gene"].to_numpy()
+
+        # Apply transformation matrix in bulk
+        if self.transformation_matrix is not None:
+            ones = np.ones((coords.shape[0], 1))
+            transformed_coords = np.dot(self.transformation_matrix, np.hstack([coords, ones]).T).T
+            x_coords, y_coords = transformed_coords[:, 0], transformed_coords[:, 1]
+        else:
+            print("There is no transformation matrix. Please load a transformation matrix.")
+            return
+
+        # Handle zoomed view differently from the full view
+        if hasattr(self, 'current_zoom') and self.current_zoom is not None:
+            # Filter for genes only in the zoomed region (in original image coordinates)
+            zoom_x_start = self.current_zoom['x_start']
+            zoom_y_start = self.current_zoom['y_start']
+            zoom_x_end = self.current_zoom['x_end']
+            zoom_y_end = self.current_zoom['y_end']
+            
+            # Create masks for genes inside the zoomed area
+            in_zoom_region = (
+                (x_coords >= zoom_x_start) & 
+                (x_coords < zoom_x_end) & 
+                (y_coords >= zoom_y_start) & 
+                (y_coords < zoom_y_end)
+            )
+            
+            # Filter to only include genes in the zoomed region
+            if not any(in_zoom_region):
+                print("No genes in the zoomed region")
+                return
+                
+            x_coords = x_coords[in_zoom_region]
+            y_coords = y_coords[in_zoom_region]
+            genes = genes[in_zoom_region]
+            
+            # Adjust coordinates for zoomed view
+            x_coords = (x_coords - zoom_x_start) * self.current_zoom['scale_factor']
+            y_coords = (y_coords - zoom_y_start) * self.current_zoom['scale_factor']
+        else:
+            # Normal full-image view
+            scale_factor = self.screenHeight / self.image.shape[0]
+            x_coords = x_coords * scale_factor
+            y_coords = y_coords * scale_factor
+
+        # Vectorized color mapping
+        colors = np.array([self.selected_genes[gene] for gene in genes])
+        
+        # Convert to integer coordinates
+        x_coords = x_coords.astype(int)
+        y_coords = y_coords.astype(int)
+
+        # Filter out genes that would be outside the visible area
+        height, width = overlay_image.shape[:2]
+        valid_coords = (
+            (x_coords >= 0) & 
+            (x_coords < width) & 
+            (y_coords >= 0) & 
+            (y_coords < height)
+        )
+        
+        x_coords = x_coords[valid_coords]
+        y_coords = y_coords[valid_coords]
+        colors = colors[valid_coords]
+
+        # Draw visible genes
+        for x, y, color in zip(x_coords, y_coords, colors):
+            color = tuple(map(int, color))
+            cv2.circle(overlay_image, (x, y), 1, color, -1)
+
+        # Convert image for display
+        overlay_image_rgb = cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
+        height, width, channel = overlay_image_rgb.shape
+        bytes_per_line = 3 * width
+        q_img = QImage(overlay_image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.image_label.setPixmap(QPixmap.fromImage(q_img))
+
 
     def load_image(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -267,20 +528,22 @@ class MainWindow(QMainWindow):
         try:
             # Load the image
             self.image = cv2.imread(file_name)
+            self.original_image = self.image.copy()  # Store original image
 
             if self.image is not None:
                 # Resize the image for display
                 self.resized_image = cv2.resize(
-                    self.image, (0, 0), fx=self.screenHeight/ (self.image.shape[0]), fy=self.screenHeight / (self.image.shape[0]))
-
-                self.display_image()
+                    self.image, (0, 0), 
+                    fx=self.screenHeight/self.image.shape[0], 
+                    fy=self.screenHeight/self.image.shape[0]
+                )
+                self.update_grid_overlay()
 
                 # If gene data is already loaded, reoverlay genes
                 if self.gene_data is not None:
                     self.overlay_genes()
 
-                self.status_bar.showMessage(
-                    "Image loaded and resized successfully")
+                self.status_bar.showMessage("Image loaded and resized successfully")
             else:
                 self.status_bar.showMessage("Failed to load image")
         except Exception as e:
