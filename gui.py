@@ -2,22 +2,41 @@
 # # Use GDAL for large TIFF files
 # import gdal     
 import random
+from cellpose import plot, utils, io
 import tkinter as tk
 import numpy as np
 import pandas as pd
 from qtpy.QtCore import Qt, QTimer, QRectF, QPointF
 from qtpy.QtGui import QImage, QPixmap, QColor, QPainter, QPen
 from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDialog,
-                            QMenuBar, QAction, QStatusBar, QProgressBar, QToolBar,
+                            QMenuBar, QAction, QStatusBar, QToolBar,
                             QComboBox, QHBoxLayout, QPushButton, QScrollArea,
                             QFrame, QColorDialog, QSlider)
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
 import cv2
 root = tk.Tk()
-screen_height = root.winfo_screenheight() - 75
+screen_height = root.winfo_screenheight() - 50
 screen_width = root.winfo_screenwidth()
-print("Width, height of screen: ", screen_width, screen_height)
+
+colors_rgb = {
+    "Dartmouth Green": (0, 102, 44),      # Hex: #00662c
+    "Spring Bud": (175, 247, 17),         # Hex: #aff711
+    "Pear": (214, 237, 86),               # Hex: #d6ed56
+    "Apple Green": (142, 166, 4),         # Hex: #8ea604
+    "Gamboge": (236, 159, 5),             # Hex: #ec9f05
+    "Rust": (191, 49, 0),                 # Hex: #bf3100
+    "OU Crimson": (128, 15, 15),          # Hex: #800f0f
+    "Citrine": (229, 209, 44),            # Hex: #e5d12c
+    "Vanilla": (255, 236, 159),           # Hex: #ffec9f
+    "Sunglow": (255, 202, 97),            # Hex: #ffca61
+    "Bittersweet": (248, 118, 92),        # Hex: #f8765c
+    "Melon": (255, 192, 183),             # Hex: #ffc0b7
+    "Indian Red": (192, 104, 105),        # Hex: #c06869
+    "Folly": (255, 66, 85),               # Hex: #ff4255
+    "Red": (255, 0, 0)
+}
+
 
 class ZoomableImageLabel(QLabel):
     def __init__(self, parent=None):
@@ -82,11 +101,6 @@ class MainWindow(QMainWindow):
         self.image_label = ZoomableImageLabel(self)
         self.image_layout.addWidget(self.image_label)
 
-        # Progress Bar
-        self.progress_bar = QProgressBar()
-        self.image_layout.addWidget(self.progress_bar)
-        self.progress_bar.hide()
-
         # Toolbar Area
         self.toolbar_area = QWidget()
         self.toolbar_layout = QVBoxLayout(self.toolbar_area)
@@ -113,7 +127,7 @@ class MainWindow(QMainWindow):
         self.gene_dropdown.setPlaceholderText("Select a Gene")
         self.gene_dropdown.currentTextChanged.connect(self.on_gene_selected)
         self.toolbar_layout.addWidget(self.gene_dropdown)
-        self.gene_dropdown.setSizeAdjustPolicy(2)
+        self.gene_dropdown.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
 
         # Selected Genes Scroll Area
         self.selected_genes_scroll = QScrollArea()
@@ -144,6 +158,10 @@ class MainWindow(QMainWindow):
         self.load_transformation_matrix_action = QAction("Load Transformation Matrix", self)
         self.load_transformation_matrix_action.triggered.connect(self.load_transformation_matrix)
         self.file_menu.addAction(self.load_transformation_matrix_action)
+        
+        self.load_anndata_action = QAction('Load Anndata Cell Centers', self)
+        self.load_anndata_action.triggered.connect(self.load_anndata)
+        self.file_menu.addAction(self.load_anndata_action)
 
         # Status Bar
         self.status_bar = QStatusBar()
@@ -158,6 +176,152 @@ class MainWindow(QMainWindow):
         self.selected_genes = {}
         self.zoom_history = []  # Stack to track zoom levels
         
+        self.cell_centers_frame = QFrame()
+        self.cell_centers_layout = QVBoxLayout(self.cell_centers_frame)
+
+        self.cell_centers_label = QLabel("Cell Centers:")
+        self.cell_centers_layout.addWidget(self.cell_centers_label)
+
+        self.toggle_cell_centers_button = QPushButton("Show Cell Centers")
+        self.toggle_cell_centers_button.setCheckable(True)
+        self.toggle_cell_centers_button.clicked.connect(self.toggle_cell_centers)
+        self.cell_centers_layout.addWidget(self.toggle_cell_centers_button)
+
+        self.toolbar_layout.addWidget(self.cell_centers_frame)
+
+        # Add to data storage section
+        self.show_cell_centers = False
+        self.cell_center_color = (255, 0, 0)  # Don't know why but their color scheme is flipped
+        self.cell_center_size = 2  # Default size
+        self.x_coords_valid = []
+        self.y_coords_valid = []
+        
+    def toggle_cell_centers(self):
+        """Toggle display of cell centers"""
+        self.show_cell_centers = self.toggle_cell_centers_button.isChecked()
+        
+        if self.show_cell_centers:
+            self.toggle_cell_centers_button.setText("Hide Cell Centers")
+            cell_centers = getattr(self, 'cell_centers', None)
+            if cell_centers is not None:
+                if self.image is not None:
+                    self.display_cell_centers()
+                else:
+                    self.status_bar.showMessage("Please load an image first")
+            else:
+                self.status_bar.showMessage("No cell centers loaded. Please load anndata file first.")
+        else:
+            self.toggle_cell_centers_button.setText("Show Cell Centers")
+            # If we're hiding cells, redisplay the image without cells
+            if self.image is not None:
+                self.display_image()
+                # Reapply gene overlay if we have genes selected
+                if self.gene_data is not None and self.selected_genes:
+                    self.overlay_genes()
+
+    
+    def _process_cell_centers(self):
+        """Process cell center coordinates for the current view."""
+        if not hasattr(self, 'cell_centers') or self.cell_centers is None or self.cell_centers.empty:
+            return
+        
+        # Process and overlay cell centers
+        x_coords, y_coords = self.cell_centers[['global_x', 'global_y']].to_numpy().T
+        
+        if self.transformation_matrix is not None:
+            coords = np.dot(self.transformation_matrix, np.hstack([x_coords[:, None], y_coords[:, None], np.ones((len(x_coords), 1))]).T).T[:, :2]
+            x_coords, y_coords = coords[:, 0], coords[:, 1]
+        
+        if getattr(self, 'current_zoom', None):
+            zoom = self.current_zoom
+            in_zoom = (zoom['x_start'] <= x_coords) & (x_coords < zoom['x_end']) & \
+                    (zoom['y_start'] <= y_coords) & (y_coords < zoom['y_end'])
+            if not any(in_zoom):
+                self.cell_center_visible = False
+                return
+            x_coords, y_coords = (x_coords[in_zoom] - zoom['x_start']) * zoom['scale_factor'], \
+                                (y_coords[in_zoom] - zoom['y_start']) * zoom['scale_factor']
+        else:
+            scale_factor = getattr(self, 'full_view_scale_factor', None) or min(
+                self.image_label.height() / self.original_image.shape[0],
+                self.image_label.width() / self.original_image.shape[1])
+            x_coords, y_coords = x_coords * scale_factor, y_coords * scale_factor
+        
+        x_coords, y_coords = x_coords.astype(int), y_coords.astype(int)
+        
+        # Filter valid coordinates
+        height, width = self.resized_image.shape[:2]
+        valid = (0 <= x_coords) & (x_coords < width) & (0 <= y_coords) & (y_coords < height)
+        
+        self.cell_center_x_coords = x_coords[valid]
+        self.cell_center_y_coords = y_coords[valid]
+        self.cell_center_visible = valid.sum() > 0
+
+
+    def _draw_cell_centers(self, image):
+        """Draw cell centers on the given image and display it."""
+        if not hasattr(self, 'cell_center_x_coords') or not hasattr(self, 'cell_center_y_coords'):
+            self._process_cell_centers()
+        
+        if hasattr(self, 'cell_center_x_coords') and hasattr(self, 'cell_center_y_coords'):
+            for x, y in zip(self.cell_center_x_coords, self.cell_center_y_coords):
+                cv2.circle(image, (x, y), self.cell_center_size, self.cell_center_color, -1)
+        
+        # Convert and display the final image
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        height, width, channel = image_rgb.shape
+        bytes_per_line = 3 * width
+        q_img = QImage(image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.image_label.setPixmap(QPixmap.fromImage(q_img))
+        
+        num_points = len(getattr(self, 'cell_center_x_coords', []))
+        self.status_bar.showMessage(f"Cell centers displayed: {num_points} visible points")
+
+    def display_cell_centers(self):
+        """Display cell centers from anndata on the image and overlay genes if enabled."""
+        cell_centers = getattr(self, 'cell_centers', None)
+        if cell_centers is None or cell_centers.empty:
+            self.status_bar.showMessage("No cell centers loaded")
+            return
+        if self.transformation_matrix is None:
+            self.status_bar.showMessage("Please load transformation matrix first")
+            return
+        if self.image is None or self.resized_image is None:
+            self.status_bar.showMessage("Please load an image first")
+            return
+        
+        # IMPORTANT: Start with a fresh copy of the display image
+        # This ensures we don't lose color information from previous overlays
+        base_image = self.resized_image.copy()
+        
+        # Process cell centers
+        self._process_cell_centers()
+        
+        # First overlay genes if the gene data is available and there are selected genes
+        if hasattr(self, 'gene_data') and self.gene_data is not None and hasattr(self, 'selected_genes') and self.selected_genes:
+            # Draw visible genes first
+            if hasattr(self, 'visible_gene_x_coords') and hasattr(self, 'visible_gene_y_coords') and hasattr(self, 'visible_gene_colors'):
+                for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
+                    color = tuple(map(int, color))
+                    color = (color[2], color[1], color[0])  # Convert RGB to BGR for OpenCV
+                    cv2.circle(base_image, (x, y), 1, color, -1)
+            else:
+                # If we don't have cached gene coordinates, call overlay_genes but disable cell centers to avoid recursion
+                temp_show_cell_centers = self.show_cell_centers
+                self.show_cell_centers = False
+                self.overlay_genes()  # This will calculate and store visible_gene_x_coords, etc.
+                self.show_cell_centers = temp_show_cell_centers
+                
+                # Now draw the genes using the stored coordinates
+                if hasattr(self, 'visible_gene_x_coords'):
+                    for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
+                        color = tuple(map(int, color))
+                        color = (color[2], color[1], color[0])  # Convert RGB to BGR for OpenCV
+                        cv2.circle(base_image, (x, y), 1, color, -1)
+        
+        # Now draw cell centers on top
+        self._draw_cell_centers(base_image)
+    
     def zoom_to_selection(self, rect):
         if self.resized_image is None or self.original_image is None:
             return
@@ -230,7 +394,7 @@ class MainWindow(QMainWindow):
             interpolation=cv2.INTER_LINEAR
         )
         
-        # Store zoom information for gene overlay calculations
+        # Store zoom information for gene overlay and cell center calculations
         self.current_zoom = {
             'x_start': orig_x1,
             'y_start': orig_y1,
@@ -243,9 +407,28 @@ class MainWindow(QMainWindow):
         self.reset_zoom_button.setEnabled(True)
         self.display_image()
         
-        # Overlay genes if data is available
-        if self.gene_data is not None:
+        # Clear any cached coordinates since we have a new zoom level
+        if hasattr(self, 'visible_gene_x_coords'):
+            delattr(self, 'visible_gene_x_coords')
+        if hasattr(self, 'visible_gene_y_coords'):
+            delattr(self, 'visible_gene_y_coords')
+        if hasattr(self, 'visible_gene_colors'):
+            delattr(self, 'visible_gene_colors')
+        if hasattr(self, 'cell_center_x_coords'):
+            delattr(self, 'cell_center_x_coords')
+        if hasattr(self, 'cell_center_y_coords'):
+            delattr(self, 'cell_center_y_coords')
+        
+        # Determine what to display based on available data and settings
+        if self.gene_data is not None and self.selected_genes and self.show_cell_centers:
+            # If both genes and cell centers should be shown
+            self.overlay_genes()  # This will now also draw cell centers
+        elif self.gene_data is not None and self.selected_genes:
+            # If only genes should be shown
             self.overlay_genes()
+        elif self.show_cell_centers:
+            # If only cell centers should be shown
+            self.display_cell_centers()
         
         self.status_bar.showMessage(f"Zoomed to region. Zoom level: {len(self.zoom_history) + 1}")
     
@@ -301,17 +484,23 @@ class MainWindow(QMainWindow):
         else:
             # No history, reset to original view
             self.do_full_reset()
+            return  # do_full_reset handles everything else including cell centers display
         
         # Update display
         self.display_image()
         
         # Overlay genes if data is available
-        if self.gene_data is not None:
+        if self.gene_data is not None and self.selected_genes:
             self.overlay_genes()
+        # If no genes but showing cell centers, display them
+        elif self.show_cell_centers:
+            self.display_cell_centers()
             
         # Update status
         zoom_level = len(self.zoom_history) + (1 if hasattr(self, 'current_zoom') and self.current_zoom else 0)
         self.status_bar.showMessage(f"Zoom level: {zoom_level}")
+        
+        
 
     def do_full_reset(self):
         """Reset to original unzoomed state"""
@@ -360,9 +549,23 @@ class MainWindow(QMainWindow):
             # Store the scale factor for use in overlay_genes
             self.full_view_scale_factor = scale_factor
             
+            # Clear any cached coordinates since we have a new zoom level
+            if hasattr(self, 'visible_gene_x_coords'):
+                delattr(self, 'visible_gene_x_coords')
+            if hasattr(self, 'visible_gene_y_coords'):
+                delattr(self, 'visible_gene_y_coords')
+            if hasattr(self, 'visible_gene_colors'):
+                delattr(self, 'visible_gene_colors')
+            if hasattr(self, 'cell_center_x_coords'):
+                delattr(self, 'cell_center_x_coords')
+            if hasattr(self, 'cell_center_y_coords'):
+                delattr(self, 'cell_center_y_coords')
             # Call overlay_genes to redraw genes if data exists
             if self.gene_data is not None and hasattr(self, 'selected_genes') and self.selected_genes:
                 self.overlay_genes()
+            # If no genes but showing cell centers, display them
+            elif self.show_cell_centers:
+                self.display_cell_centers()
                 
             self.status_bar.showMessage("View reset to original")
 
@@ -371,7 +574,6 @@ class MainWindow(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(
             self, "Open CSV File", "", "CSV Files (*.csv)")
         if file_name:
-            self.progress_bar.show()
             self.status_bar.showMessage("Loading Transformation Matrix...")
             QTimer.singleShot(0, lambda: self.process_csv(file_name))
 
@@ -379,11 +581,77 @@ class MainWindow(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(
             self, "Open CSV File", "", "CSV Files (*.csv)")
         if file_name:
-            self.progress_bar.show()
             self.status_bar.showMessage(
                 "Loading Detected Transcripts...(this may take a while)")
             QTimer.singleShot(0, lambda: self.process_csv(file_name))
-
+    
+    def load_anndata(self):
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Open Anndata File", "", "Anndata Files (*.h5ad);"
+            "All Files (*)")
+        if file_name:
+            self.status_bar.showMessage(
+                "Loading Anndata...")
+            QTimer.singleShot(0, lambda: self.process_anndata(file_name))
+            
+    def process_anndata(self, file_name):
+        """Process anndata file to extract cell centers"""
+        try:
+            import anndata as ad
+            adata = ad.read_h5ad(file_name)
+            self.status_bar.showMessage("AnnData loaded successfully")
+            
+            # Check for spatial coordinates in different possible locations
+            if 'spatial' in adata.obsm:
+                cell_coords = adata.obsm['spatial']
+                x_coords = cell_coords[:, 0]
+                y_coords = cell_coords[:, 1]
+            elif 'X_spatial' in adata.obsm:
+                cell_coords = adata.obsm['X_spatial']
+                x_coords = cell_coords[:, 0]
+                y_coords = cell_coords[:, 1]
+            elif 'center_x' in adata.obs and 'center_y' in adata.obs:
+                x_coords = adata.obs['center_x'].values
+                y_coords = adata.obs['center_y'].values
+            elif 'x' in adata.obs and 'y' in adata.obs:
+                x_coords = adata.obs['x'].values
+                y_coords = adata.obs['y'].values
+            else:
+                # Last resort: try to find any columns that might contain coordinates
+                potential_x_cols = [col for col in adata.obs.columns if 'x' in col.lower()]
+                potential_y_cols = [col for col in adata.obs.columns if 'y' in col.lower()]
+                
+                if potential_x_cols and potential_y_cols:
+                    x_coords = adata.obs[potential_x_cols[0]].values
+                    y_coords = adata.obs[potential_y_cols[0]].values
+                    self.status_bar.showMessage(f"Using columns '{potential_x_cols[0]}' and '{potential_y_cols[0]}' for coordinates")
+                else:
+                    self.status_bar.showMessage("Could not find cell center coordinates in AnnData file")
+                    return
+            
+            # Create DataFrame to store cell centers
+            self.cell_centers = pd.DataFrame({
+                'global_x': x_coords,
+                'global_y': y_coords
+            })
+            
+            num_cells = len(self.cell_centers)
+            self.status_bar.showMessage(f"Loaded {num_cells} cell centers from AnnData file")
+            
+            # Enable the cell centers button
+            self.toggle_cell_centers_button.setEnabled(True)
+            
+            # If already toggled to show cells and we have an image, display them
+            cell_centers = getattr(self, 'cell_centers', None)
+            if (cell_centers is not None and not cell_centers.empty) and (self.image is not None):
+                self.display_cell_centers()
+                
+        except ImportError:
+            self.status_bar.showMessage("Please install the 'anndata' package to load AnnData files using `pip install anndata`")
+        except Exception as e:
+            self.status_bar.showMessage(f"Error processing AnnData file: {str(e)}")
+            print(f"Error processing AnnData file: {str(e)}")
+            
     def process_csv(self, file_name):
         try:
             if "transform" in file_name.lower():
@@ -395,23 +663,20 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(
                     "Transformation matrix loaded successfully")
             else:
-                # Load gene transcript data
                 self.gene_data = pd.read_csv(file_name)
-                self.status_bar.showMessage("Gene data loaded successfully")
 
-                # Populate gene dropdown
                 unique_genes = self.gene_data['gene'].unique()
                 self.gene_dropdown.clear()
                 self.gene_dropdown.addItems(unique_genes)
 
                 if self.image is not None:
                     self.overlay_genes()
+                    
+                self.status_bar.showMessage("Gene data loaded successfully")
         except Exception as e:
             self.status_bar.showMessage(
-                f"Error loading CSV file {file_name}: {str(e)}")
-        finally:
-            self.progress_bar.hide()
-
+                f"Error loading file {file_name}: {str(e)}")
+        
     def on_gene_selected(self, gene):
         if gene in self.selected_genes:
             self.status_bar.showMessage("Gene already selected, choose a different gene.")
@@ -430,7 +695,7 @@ class MainWindow(QMainWindow):
         # Color indicator
         color_label = QLabel()
         color_label.setFixedSize(20, 20)
-        color_label.setStyleSheet(f"background-color: rgb({color[2]}, {color[1]}, {color[0]}); border-radius: 10px;")
+        color_label.setStyleSheet(f"background-color: rgb({color[0]}, {color[1]}, {color[2]}); border-radius: 10px;")
 
         # Gene name label
         gene_name_label = QLabel(gene)
@@ -447,7 +712,7 @@ class MainWindow(QMainWindow):
         gene_widget_layout.addWidget(remove_button)
 
         # Store gene and color
-        self.selected_genes[gene] = color
+        self.selected_genes[gene] = (color[0], color[1], color[2])
 
         # Add to selected genes layout
         self.selected_genes_layout.addWidget(gene_widget)
@@ -484,16 +749,19 @@ class MainWindow(QMainWindow):
         self.overlay_genes()
 
     def generate_unique_color(self):
-        # Generate a random color that isn't too light
-        while True:
-            color = (random.randint(50, 200),
-                     random.randint(50, 200),
-                     random.randint(50, 200))
-            # Ensure color is not already used
-            if color not in self.selected_genes.values():
-                return color
+        # Define available colors from the palette
+        available_colors = [value for key, value in colors_rgb.items() 
+                            if value not in self.selected_genes.values()]
+        
+        # If all colors have been used, start reusing them
+        if not available_colors:
+            return random.choice(list(colors_rgb.values()))
+        
+        # Return a random color from the available ones
+        return random.choice(available_colors)
 
     def overlay_genes(self):
+        """Overlay genes on the image and display cell centers if enabled."""
         if self.gene_data is None or self.image is None or self.resized_image is None:
             print("Please make sure to upload the detected transcripts")
             return
@@ -509,6 +777,10 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("No selected genes to overlay.")
             # Display the original resized image without any overlay
             self.display_image()
+            
+            # Check if cell centers need to be displayed
+            if self.show_cell_centers:
+                self._draw_cell_centers(overlay_image)
             return
 
         # Extract coordinates and genes
@@ -543,6 +815,13 @@ class MainWindow(QMainWindow):
             # Filter to only include genes in the zoomed region
             if not any(in_zoom_region):
                 self.status_bar.showMessage("No genes in the zoomed region")
+                
+                # Still display the zoomed image
+                self.display_image()
+                
+                # Check if cell centers need to be displayed
+                if self.show_cell_centers:
+                    self._draw_cell_centers(overlay_image)
                 return
                 
             x_coords = x_coords[in_zoom_region]
@@ -590,18 +869,28 @@ class MainWindow(QMainWindow):
         y_coords = y_coords[valid_coords]
         colors = colors[valid_coords]
 
+        # Store for potential use in other functions
+        self.visible_gene_x_coords = x_coords
+        self.visible_gene_y_coords = y_coords
+        self.visible_gene_colors = colors
+
         # Draw visible genes
         for x, y, color in zip(x_coords, y_coords, colors):
             color = tuple(map(int, color))
+            color = (color[2], color[1], color[0])  # Convert RGB to BGR for OpenCV
             cv2.circle(overlay_image, (x, y), 1, color, -1)
 
-        # Convert image for display
-        overlay_image_rgb = cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
-        height, width, channel = overlay_image_rgb.shape
-        bytes_per_line = 3 * width
-        q_img = QImage(overlay_image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        self.image_label.setPixmap(QPixmap.fromImage(q_img))
-        
+        # Check if cell centers need to be displayed
+        if self.show_cell_centers:
+            self._draw_cell_centers(overlay_image)
+        else:
+            # Convert image for display
+            overlay_image_rgb = cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
+            height, width, channel = overlay_image_rgb.shape
+            bytes_per_line = 3 * width
+            q_img = QImage(overlay_image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            self.image_label.setPixmap(QPixmap.fromImage(q_img))
+            
         self.status_bar.showMessage(f"Genes overlaid: {len(x_coords)} visible points")
 
     def load_image(self):
@@ -610,7 +899,6 @@ class MainWindow(QMainWindow):
             self, "Open Image File", "", "Images (*.png *.jpg *.bmp *.tif *.tiff)")
         self.status_bar.showMessage(f"Opening File...")
         if file_name:
-            self.progress_bar.show()
             self.status_bar.showMessage("Loading image...")
             QTimer.singleShot(100, lambda: self.process_image(file_name))
 
@@ -618,14 +906,6 @@ class MainWindow(QMainWindow):
         try:
             # Create an image pyramid for large images
             if file_name.lower().endswith(('.tif', '.tiff')):
-                
-            #     dataset = gdal.Open(file_name)
-            #     # Store dataset reference and load only visible portion
-            #     self.image_dataset = dataset
-            #     # Get lower resolution thumbnail for initial display
-            #     self.image = self.get_thumbnail_from_dataset(dataset)
-            # else:
-            #     # For smaller images, load normally
                 self.image = cv2.imread(file_name)
             
             self.original_image = self.image.copy()
@@ -645,8 +925,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.status_bar.showMessage(f"Error loading image: {str(e)}")
             print(f"Error loading image: {str(e)}")
-        finally:
-            self.progress_bar.hide()
 
     def display_image(self):
         if self.resized_image is not None:
@@ -697,4 +975,3 @@ if __name__ == '__main__':
     main_window = MainWindow()
     main_window.show()
     sys.exit(app.exec_())
-    
