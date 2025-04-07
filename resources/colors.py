@@ -1,0 +1,17 @@
+colors_rgb = {
+    "Dartmouth Green": (0, 102, 44),
+    "Spring Bud": (175, 247, 17),
+    "Pear": (214, 237, 86),
+    "Apple Green": (142, 166, 4),
+    "Gamboge": (236, 159, 5),
+    "Rust": (191, 49, 0),
+    "OU Crimson": (128, 15, 15),
+    "Citrine": (229, 209, 44),
+    "Vanilla": (255, 236, 159),
+    "Sunglow": (255, 202, 97),
+    "Bittersweet": (248, 118, 92),
+    "Melon": (255, 192, 183),
+    "Indian Red": (192, 104, 105),
+    "Folly": (255, 66, 85),
+    "Red": (255, 0, 0),
+}
