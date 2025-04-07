@@ -2,7 +2,7 @@
 # # Use GDAL for large TIFF files
 # import gdal     
 import random
-from cellpose import plot, utils, io
+# from cellpose import plot, utils, io
 import tkinter as tk
 import numpy as np
 import pandas as pd
@@ -15,6 +15,7 @@ from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDial
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
 import cv2
+
 root = tk.Tk()
 screen_height = root.winfo_screenheight() - 50
 screen_width = root.winfo_screenwidth()
@@ -906,8 +907,10 @@ class MainWindow(QMainWindow):
         try:
             # Create an image pyramid for large images
             if file_name.lower().endswith(('.tif', '.tiff')):
+                print(f"Reading image, {file_name}")
                 self.image = cv2.imread(file_name)
             
+            print("making copy")
             self.original_image = self.image.copy()
 
             if self.image is not None:
@@ -925,7 +928,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.status_bar.showMessage(f"Error loading image: {str(e)}")
             print(f"Error loading image: {str(e)}")
-
+    
     def display_image(self):
         if self.resized_image is not None:
             # Convert the image to RGB format
