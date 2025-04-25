@@ -5,10 +5,8 @@ import numpy as np
 def process_image(main_window, file_name):
     try:
         if file_name.lower().endswith(('.tif', '.tiff')):
-            print(f"Reading image, {file_name}")
             main_window.image = cv2.imread(file_name)
 
-        print("Making copy of original image")
         main_window.original_image = main_window.image.copy()
 
         if main_window.image is not None:

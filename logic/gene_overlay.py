@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from resources.colors import colors_rgb
+import random
 
 def generate_unique_color(selected_genes):
     available_colors = [value for key, value in colors_rgb.items()

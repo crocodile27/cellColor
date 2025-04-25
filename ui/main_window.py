@@ -2,7 +2,6 @@
 # # Use GDAL for large TIFF files
 # import gdal 
 import random
-# from cellpose import plot, utils, io
 import tkinter as tk
 import numpy as np
 import pandas as pd
@@ -19,6 +18,9 @@ screen_width = root.winfo_screenwidth()
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
 import cv2 
+
+from cellpose import utils, plot, io as cp_io
+import tifffile
 from ui.zoomable_image_label import ZoomableImageLabel
 from resources.colors import colors_rgb
 from logic.gene_overlay import (
@@ -32,7 +34,6 @@ from logic.cell_centers import (
 )
 from logic.image_processing import process_image, display_image, resize_image_to_fit
 from logic.zoom_utils import zoom_to_selection, reset_zoom, get_pixmap_rect
-
 
 
 
@@ -152,7 +153,44 @@ class MainWindow(QMainWindow):
         self.x_coords_valid = []
         self.y_coords_valid = []
         
+        # plotting the cellpose mask
+        self.cell_mask = None
+        self.cell_mask_rgb = None
+        self.cell_mask_outlines = None
+        self.show_cell_mask = False
+        self.show_cell_outlines = False
         
+        # menu items for mask: 
+        self.load_mask_action = QAction("Load Cell Mask", self)
+        self.load_mask_action.triggered.connect(self.load_cell_mask)
+        self.file_menu.addAction(self.load_mask_action)
+
+        self.toggle_mask_frame = QFrame()
+        self.toggle_mask_layout = QVBoxLayout(self.toggle_mask_frame)
+
+        self.toggle_mask_label = QLabel("Masks:")
+        self.toggle_mask_layout.addWidget(self.toggle_mask_label)
+
+        self.toggle_mask_button = QPushButton("Overlay Masks")
+        self.toggle_mask_button.setCheckable(True)
+        self.toggle_mask_button.clicked.connect(self.toggle_mask_overlay)
+        self.toggle_mask_layout.addWidget(self.toggle_mask_button)
+        
+        self.toolbar_layout.addWidget(self.toggle_mask_frame)
+        
+        self.toggle_outline_frame = QFrame()
+        self.toggle_outline_layout = QVBoxLayout(self.toggle_outline_frame)
+
+        self.toggle_outline_label = QLabel("Outlines:")
+        self.toggle_outline_layout.addWidget(self.toggle_outline_label)
+
+        self.toggle_outline_button = QPushButton("Outline Cell")
+        self.toggle_outline_button.setCheckable(True)
+        self.toggle_outline_button.clicked.connect(self.toggle_outline_overlay)
+        self.toggle_outline_layout.addWidget(self.toggle_outline_button)
+
+        self.toolbar_layout.addWidget(self.toggle_outline_frame)
+
         
     def toggle_cell_centers(self):
         """Toggle display of cell centers"""
@@ -424,13 +462,11 @@ class MainWindow(QMainWindow):
         try:
             # Create an image pyramid for large images
             if file_name.lower().endswith(('.tif', '.tiff')):
-                print(f"Reading image, {file_name}")
                 cv2.setNumThreads(0)
                 cv2.setUseOptimized(True)
                 cv2.utils.setOpenCVIOMaxImagePixels(pow(2, 40))
                 self.image = cv2.imread(file_name, cv2.IMREAD_UNCHANGED)
             
-            print("making copy")
             self.original_image = self.image.copy()
 
             if self.image is not None:
@@ -457,6 +493,84 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'original_image') and self.original_image is not None:
             # Delay the resize slightly to ensure all UI components have updated their sizes
             QTimer.singleShot(50, lambda: resize_image_to_fit(self))
+
+    def load_cell_mask(self):
+        mask_file, _ = QFileDialog.getOpenFileName(
+            self, "Open Cellpose Segmentation (.npy)", "", "NPY Files (*.npy)"
+        )
+        if not mask_file:
+            return
+
+        try:
+            self.status_bar.showMessage("Loading mask...")
+            loaded_data = np.load(mask_file, allow_pickle=True)
+            
+            print(f"Loaded data type: {type(loaded_data)}")
+            
+                    
+            #     self.cell_mask_rgb = plot.mask_overlay(img, dat['masks'], colors=colors, alpha=0.3)
+            #     self.cell_mask_outlines = utils.outlines_list(dat['masks'])
+                
+            #     self.show_cell_mask = True
+            #     self.show_cell_outlines = False
+            #     self.toggle_mask_button.setChecked(True)
+            #     self.toggle_outline_button.setChecked(False)
+                
+            #     self.status_bar.showMessage("Mask loaded successfully.")
+            #     self.redraw_image()
+            # else:
+            #     self.status_bar.showMessage("Invalid mask file format: 'masks' key not found")
+                
+        except Exception as e:
+            self.status_bar.showMessage(f"Error loading mask: {str(e)}")
+            print(f"Error loading mask: {e}")
+            import traceback
+            traceback.print_exc()
+            
+    def redraw_image(self):
+        if self.resized_image is None:
+            return
+
+        display = self.resized_image.copy()
+
+        # Overlay genes
+        if hasattr(self, 'visible_gene_x_coords'):
+            for x, y, color in zip(self.visible_gene_x_coords,
+                                self.visible_gene_y_coords,
+                                self.visible_gene_colors):
+                bgr = (int(color[2]), int(color[1]), int(color[0]))
+                cv2.circle(display, (x, y), 1, bgr, -1)
+
+        # Overlay cell centers
+        if self.show_cell_centers:
+            self._draw_cell_centers(display)
+
+        # Overlay cell mask RGB
+        if self.show_cell_mask and self.cell_mask_rgb is not None:
+            # Resize mask_rgb to match display
+            mask_resized = cv2.resize(self.cell_mask_rgb, (display.shape[1], display.shape[0]))
+            display = cv2.addWeighted(display, 1.0, mask_resized, 0.3, 0)
+
+        # Draw outlines
+        if self.show_cell_outlines and self.cell_mask_outlines is not None:
+            for outline in self.cell_mask_outlines:
+                pts = outline.astype(np.int32)
+                cv2.polylines(display, [pts], isClosed=True, color=(0, 0, 255), thickness=1)
+
+        # Display final image
+        image_rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+        height, width, channel = image_rgb.shape
+        bytes_per_line = 3 * width
+        q_img = QImage(image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        self.image_label.setPixmap(QPixmap.fromImage(q_img))
+        
+    def toggle_mask_overlay(self, checked):
+        self.show_cell_mask = checked
+        self.redraw_image()
+
+    def toggle_outline_overlay(self, checked):
+        self.show_cell_outlines = checked
+        self.redraw_image()
 
 
         
