@@ -15,7 +15,8 @@ from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDial
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
 import cv2
-
+from cellpose import utils
+import sys
 root = tk.Tk()
 screen_height = root.winfo_screenheight() - 50
 screen_width = root.winfo_screenwidth()
@@ -105,6 +106,29 @@ class MainWindow(QMainWindow):
         # Toolbar Area
         self.toolbar_area = QWidget()
         self.toolbar_layout = QVBoxLayout(self.toolbar_area)
+        
+        # Cellpose Mask Toggle Button
+        self.toggle_cellpose_button = QPushButton("Show Cellpose Masks")
+        self.toggle_cellpose_button.setCheckable(True)
+        self.toggle_cellpose_button.clicked.connect(self.toggle_cellpose_masks)
+        self.toggle_cellpose_button.setEnabled(False)  # Initially disabled until masks are loaded
+        self.toolbar_layout.addWidget(self.toggle_cellpose_button)
+
+        # Cellpose Outline Toggle Button
+        self.toggle_cellpose_outline_button = QPushButton("Show Cellpose Outlines")
+        self.toggle_cellpose_outline_button.setCheckable(True)
+        self.toggle_cellpose_outline_button.clicked.connect(self.toggle_cellpose_outlines)
+        self.toggle_cellpose_outline_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.toggle_cellpose_outline_button)
+
+        # Outline visibility state
+        self.show_cellpose_outlines = False
+
+        # Data storage
+        self.cellpose_masks = None
+        self.cellpose_colors = None
+        self.cellpose_outlines = None
+        self.show_cellpose_masks = False
 
         # Zoom Controls
         self.zoom_controls_frame = QFrame()
@@ -164,6 +188,11 @@ class MainWindow(QMainWindow):
         self.load_anndata_action.triggered.connect(self.load_anndata)
         self.file_menu.addAction(self.load_anndata_action)
 
+        # Load Cellpose Masks Action
+        self.load_cellpose_masks_action = QAction('Load Cellpose Masks', self)
+        self.load_cellpose_masks_action.triggered.connect(self.load_cellpose_masks)
+        self.file_menu.addAction(self.load_cellpose_masks_action)
+        
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -197,6 +226,266 @@ class MainWindow(QMainWindow):
         self.x_coords_valid = []
         self.y_coords_valid = []
         
+        self.cached_resized_mask_view = None  # cache per zoom
+
+    def _generate_outlines_and_update(self):
+        import os
+
+        # Derive the original mask path from the color image path if available
+        if hasattr(self, 'cellpose_mask_color_image') and hasattr(self, 'cellpose_masks'):
+            # Guess filename from npy file (you could store this explicitly if unsure)
+            mask_shape = self.cellpose_masks.shape
+            color_image_shape = getattr(self.cellpose_mask_color_image, 'shape', None)
+            if color_image_shape and color_image_shape[:2] == mask_shape:
+                base_path = None
+                for ext in ['_color.npy', '_masks.npy', '.npy']:
+                    try:
+                        color_path = next(
+                            p for p in sys.argv if p.endswith(ext)
+                        )
+                        base_path = color_path.replace(ext, '')
+                        break
+                    except StopIteration:
+                        continue
+            else:
+                base_path = None
+        else:
+            base_path = None
+
+        outline_path = getattr(self, 'cellpose_mask_base_path', None)
+        if outline_path:
+            outline_path += "_outlines.npy"
+            if os.path.exists(outline_path):
+                print(f"Loading cached outlines from {outline_path}")
+                self.cellpose_outlines = np.load(outline_path, allow_pickle=True).tolist()
+            else:
+                print("Generating outlines...")
+                self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
+                np.save(outline_path, np.array(self.cellpose_outlines, dtype=object))
+                print(f"Outlines saved to {outline_path}")
+        else:
+            print("No base path found; computing outlines without caching.")
+            self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
+
+
+        self.toggle_cellpose_button.setEnabled(True)
+        self.toggle_cellpose_outline_button.setEnabled(True)
+        self.status_bar.showMessage("Cellpose masks loaded successfully")
+        self.update_display()
+        
+    def load_cellpose_masks(self):
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open Cellpose Masks", "", "NumPy Files (*.npy)")
+        if not file_name:
+            return
+
+        try:
+            print(f"Attempting to load Cellpose masks from file: {file_name}")
+            data = np.load(file_name)
+
+            if isinstance(data, np.ndarray) and data.ndim == 2 and np.issubdtype(data.dtype, np.integer):
+                self.cellpose_masks = data
+                print(f"Loaded raw mask array. Shape: {data.shape}, Max label: {data.max()}")
+
+                num_labels = int(data.max())
+                rng = np.random.default_rng(42)
+                self.cellpose_colors = rng.integers(0, 255, size=(num_labels, 3), dtype=np.uint8)
+
+                # Try to load precomputed color image
+                self.cellpose_mask_base_path = file_name.replace(".npy", "")
+                color_path = self.cellpose_mask_base_path + "_color.npy"
+                outline_path = self.cellpose_mask_base_path + "_outlines.npy"
+                if os.path.exists(color_path):
+                    print(f"Loading cached color image from {color_path}")
+                    self.cellpose_mask_color_image = np.load(color_path)
+                else:
+                    print("Generating color image...")
+                    color_lut = np.vstack(([0, 0, 0], self.cellpose_colors))  # Ensure background = black
+                    indices = self.cellpose_masks.astype(np.int32)
+                    self.cellpose_mask_color_image = color_lut[indices].astype(np.uint8)
+                    # Save for future use
+                    np.save(color_path, self.cellpose_mask_color_image)
+                    print(f"Saved color image to {color_path}")
+
+                self.status_bar.showMessage("Generating Cellpose outlines... this may take a moment")
+                QTimer.singleShot(100, self._generate_outlines_and_update)
+
+            else:
+                raise ValueError("Unsupported mask format")
+
+        except Exception as e:
+            print(f"Error while loading Cellpose masks: {str(e)}")
+            self.status_bar.showMessage(f"Error loading Cellpose masks: {str(e)}")
+
+
+    def toggle_cellpose_masks(self):
+        self.show_cellpose_masks = self.toggle_cellpose_button.isChecked()
+        self.toggle_cellpose_button.setText("Hide Cellpose Masks" if self.show_cellpose_masks else "Show Cellpose Masks")
+        self.update_display()
+
+    def toggle_cellpose_outlines(self):
+        self.show_cellpose_outlines = self.toggle_cellpose_outline_button.isChecked()
+        self.toggle_cellpose_outline_button.setText("Hide Cellpose Outlines" if self.show_cellpose_outlines else "Show Cellpose Outlines")
+        self.update_display()
+    
+    def update_display(self):
+        if self.resized_image is None:
+            return
+        
+        base_image = self.resized_image.copy()
+
+        # Overlay genes
+        if hasattr(self, 'visible_gene_x_coords'):
+            for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
+                # Ensure color is a tuple of integers
+                bgr_color = tuple(int(c) for c in color[::-1])  # Reverse RGB to BGR and convert to int
+                cv2.circle(base_image, (x, y), 1, bgr_color, -1)
+
+        # Overlay cell centers
+        if self.show_cell_centers:
+            self._draw_cell_centers(base_image)
+
+        # Overlay Cellpose masks
+        if self.show_cellpose_masks and self.cellpose_masks is not None:
+            self._draw_cellpose_mask_fill(base_image)
+
+        if self.show_cellpose_outlines and self.cellpose_outlines is not None:
+            self._draw_cellpose_mask_outlines(base_image)
+
+        # Display final image
+        overlay_image_rgb = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
+        height, width, channel = overlay_image_rgb.shape
+        q_img = QImage(overlay_image_rgb.data, width, height, 3 * width, QImage.Format_RGB888)
+        self.image_label.setPixmap(QPixmap.fromImage(q_img))
+        if hasattr(self, 'current_zoom'):
+            print(f"[DEBUG] Applying zoom: {self.current_zoom}")
+        else:
+            print("[DEBUG] No zoom active")
+        
+    def _draw_cellpose_masks(self, image):
+        if self.cellpose_masks is None:
+            return
+
+        if hasattr(self, 'current_zoom') and self.current_zoom is not None:
+            # We're zoomed in — crop the mask
+            zoom = self.current_zoom
+            crop = self.cellpose_masks[zoom['y_start']:zoom['y_end'], zoom['x_start']:zoom['x_end']]
+            scale_factor = zoom['scale_factor']
+        else:
+            # Use full mask
+            crop = self.cellpose_masks
+            scale_factor = self.full_view_scale_factor
+
+        # Resize cropped mask to current view size
+        resized_masks = cv2.resize(
+            crop.astype(np.uint16),
+            (image.shape[1], image.shape[0]),
+            interpolation=cv2.INTER_NEAREST
+        )
+
+        for mask_id in np.unique(resized_masks):
+            if mask_id == 0:
+                continue
+            mask_area = resized_masks == mask_id
+            color_idx = (mask_id - 1) % len(self.cellpose_colors)
+            color_bgr = self.cellpose_colors[color_idx][::-1]
+            color_array = np.tile(color_bgr, (np.count_nonzero(mask_area), 1)).astype(np.uint8)
+            original_pixels = image[mask_area]
+            
+            blended = cv2.addWeighted(original_pixels, 0.5, color_array, 0.5, 0)
+            image[mask_area] = blended
+
+        # Draw outlines (from full image, but scaled)
+        if self.current_zoom:
+            zoom = self.current_zoom
+            scale_x = image.shape[1] / (zoom['x_end'] - zoom['x_start'])
+            scale_y = image.shape[0] / (zoom['y_end'] - zoom['y_start'])
+        else:
+            scale_x = image.shape[1] / self.cellpose_masks.shape[1]
+            scale_y = image.shape[0] / self.cellpose_masks.shape[0]
+
+        for outline in self.cellpose_outlines:
+            if hasattr(self, 'current_zoom') and self.current_zoom is not None:
+                # Filter to outlines within the zoomed crop
+                outline = np.array(outline)
+                outline = outline[:, [1, 0]]  # Flip (y, x) to (x, y)
+                in_x = (outline[:, 0] >= zoom['x_start']) & (outline[:, 0] < zoom['x_end'])
+                in_y = (outline[:, 1] >= zoom['y_start']) & (outline[:, 1] < zoom['y_end'])
+                valid = in_x & in_y
+                if not np.any(valid):
+                    continue
+                outline = outline[valid]
+                outline = outline - np.array([zoom['x_start'], zoom['y_start']])
+            else:
+                outline = np.array(outline)
+                outline = outline[:, [1, 0]]  # Flip (y, x) to (x, y)
+
+            outline_scaled = np.array([[int(x * scale_x), int(y * scale_y)] for x, y in outline])
+            if len(outline_scaled) > 1:
+                cv2.polylines(image, [outline_scaled], isClosed=True, color=(0, 0, 255), thickness=1)
+
+    def _draw_cellpose_mask_fill(self, image):
+        if not hasattr(self, 'cellpose_mask_color_image'):
+            return
+
+        if hasattr(self, 'current_zoom') and self.current_zoom is not None:
+            zoom = self.current_zoom
+            crop = self.cellpose_mask_color_image[
+                zoom['y_start']:zoom['y_end'],
+                zoom['x_start']:zoom['x_end']
+            ]
+        else:
+            crop = self.cellpose_mask_color_image
+
+        if crop.size == 0:
+            print("[Error] Zoomed-in region is empty — skipping mask fill.")
+            return
+        resized = cv2.resize(crop, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+        # Force both images to be np.uint8
+        if resized.dtype != np.uint8:
+            resized = resized.astype(np.uint8)
+        if image.dtype != np.uint8:
+            image[:] = image.astype(np.uint8)
+        if image.dtype != np.uint8 or resized.dtype != np.uint8:
+            print(f"[Warning] dtype mismatch: image={image.dtype}, resized={resized.dtype}")
+        cv2.addWeighted(image, 0.5, resized, 0.5, 0, dst=image)
+        
+           
+    def _draw_cellpose_mask_outlines(self, image):
+        if self.cellpose_outlines is None:
+            return
+
+        if hasattr(self, 'current_zoom') and self.current_zoom is not None:
+            zoom = self.current_zoom
+            x0, y0 = zoom['x_start'], zoom['y_start']
+            x1, y1 = zoom['x_end'], zoom['y_end']
+            w, h = x1 - x0, y1 - y0
+
+            scale_x = image.shape[1] / w
+            scale_y = image.shape[0] / h
+
+            for outline in self.cellpose_outlines:
+                outline = np.array(outline)
+                in_x = (outline[:, 0] >= x0) & (outline[:, 0] < x1)
+                in_y = (outline[:, 1] >= y0) & (outline[:, 1] < y1)
+                valid = in_x & in_y
+                if not np.any(valid):
+                    continue
+                outline = outline[valid]
+                outline_zoom = outline - np.array([x0, y0])  # convert to crop-local coords
+                outline_scaled = np.array([[int(x * scale_x), int(y * scale_y)] for x, y in outline_zoom])
+
+                if len(outline_scaled) > 1:
+                    cv2.polylines(image, [outline_scaled], isClosed=True, color=(0, 0, 255), thickness=1)
+        else:
+            scale_x = image.shape[1] / self.cellpose_masks.shape[1]
+            scale_y = image.shape[0] / self.cellpose_masks.shape[0]
+            for outline in self.cellpose_outlines:
+                outline = np.array(outline)
+                outline_scaled = np.array([[int(x * scale_x), int(y * scale_y)] for x, y in outline])
+                if len(outline_scaled) > 1:
+                    cv2.polylines(image, [outline_scaled], isClosed=True, color=(0, 0, 255), thickness=1)
+                    
     def toggle_cell_centers(self):
         """Toggle display of cell centers"""
         self.show_cell_centers = self.toggle_cell_centers_button.isChecked()
@@ -321,81 +610,63 @@ class MainWindow(QMainWindow):
                         cv2.circle(base_image, (x, y), 1, color, -1)
         
         # Now draw cell centers on top
-        self._draw_cell_centers(base_image)
+        self.update_display()
     
     def zoom_to_selection(self, rect):
         if self.resized_image is None or self.original_image is None:
             return
-            
-        # Get the pixmap geometry
+
         pixmap = self.image_label.pixmap()
         if not pixmap:
             return
-            
+
         pixmap_rect = self.get_pixmap_rect()
         if not pixmap_rect.isValid():
             return
-            
-        # Adjust rect coordinates relative to pixmap position
+
         normalized_rect = QRectF(
-            (rect.x() - pixmap_rect.x()) / pixmap_rect.width(), 
+            (rect.x() - pixmap_rect.x()) / pixmap_rect.width(),
             (rect.y() - pixmap_rect.y()) / pixmap_rect.height(),
             rect.width() / pixmap_rect.width(),
             rect.height() / pixmap_rect.height()
         )
-        
-        # Ensure rect is within valid bounds [0-1]
+
         normalized_rect = QRectF(
             max(0, normalized_rect.x()),
             max(0, normalized_rect.y()),
             min(1 - normalized_rect.x(), normalized_rect.width()),
             min(1 - normalized_rect.y(), normalized_rect.height())
         )
-        
-        # Calculate region in original image coordinates
+
         orig_height, orig_width = self.original_image.shape[:2]
-        
-        # If we're already zoomed in, calculate based on current zoom
+
         if hasattr(self, 'current_zoom') and self.current_zoom is not None:
-            # Save current zoom state to history for back navigation
             self.zoom_history.append(self.current_zoom.copy())
-            
-            # Calculate new zoom coordinates relative to current zoom
-            current_x_start = self.current_zoom['x_start']
-            current_y_start = self.current_zoom['y_start']
-            current_width = self.current_zoom['x_end'] - self.current_zoom['x_start']
-            current_height = self.current_zoom['y_end'] - self.current_zoom['y_start']
-            
-            orig_x1 = int(current_x_start + normalized_rect.x() * current_width)
-            orig_y1 = int(current_y_start + normalized_rect.y() * current_height)
-            orig_x2 = int(current_x_start + (normalized_rect.x() + normalized_rect.width()) * current_width)
-            orig_y2 = int(current_y_start + (normalized_rect.y() + normalized_rect.height()) * current_height)
+            cur = self.current_zoom
+            orig_x1 = int(cur['x_start'] + normalized_rect.x() * (cur['x_end'] - cur['x_start']))
+            orig_y1 = int(cur['y_start'] + normalized_rect.y() * (cur['y_end'] - cur['y_start']))
+            orig_x2 = int(cur['x_start'] + (normalized_rect.x() + normalized_rect.width()) * (cur['x_end'] - cur['x_start']))
+            orig_y2 = int(cur['y_start'] + (normalized_rect.y() + normalized_rect.height()) * (cur['y_end'] - cur['y_start']))
         else:
-            # First zoom level from original image
             orig_x1 = int(normalized_rect.x() * orig_width)
             orig_y1 = int(normalized_rect.y() * orig_height)
             orig_x2 = int((normalized_rect.x() + normalized_rect.width()) * orig_width)
             orig_y2 = int((normalized_rect.y() + normalized_rect.height()) * orig_height)
         
-        # Extract the region from the original high-resolution image
+        orig_x1 = max(0, min(orig_x1, orig_width - 1))
+        orig_x2 = max(0, min(orig_x2, orig_width))
+        orig_y1 = max(0, min(orig_y1, orig_height - 1))
+        orig_y2 = max(0, min(orig_y2, orig_height))
+
+        if orig_x2 <= orig_x1 or orig_y2 <= orig_y1:
+            print("[Warning] Invalid zoom box: zero width/height")
+            return
+
         selected_region = self.original_image[orig_y1:orig_y2, orig_x1:orig_x2]
-        
-        # Calculate scale factor to fit the region in the view
-        view_height = self.image_label.height()
-        view_width = self.image_label.width()
-        scale_factor = view_height / selected_region.shape[0]
-        scale_factor2 = view_width / selected_region.shape[1]
-        scale_factor = min(scale_factor, scale_factor2)
-        
-        # Resize the selected region
-        self.resized_image = cv2.resize(
-            selected_region, (0, 0),
-            fx=scale_factor,
-            fy=scale_factor,
-            interpolation=cv2.INTER_LINEAR
-        )
-        
-        # Store zoom information for gene overlay and cell center calculations
+        view_height, view_width = self.image_label.height(), self.image_label.width()
+        scale_factor = min(view_height / selected_region.shape[0], view_width / selected_region.shape[1])
+
+        # ✅ Set current_zoom BEFORE resized_image
         self.current_zoom = {
             'x_start': orig_x1,
             'y_start': orig_y1,
@@ -403,35 +674,32 @@ class MainWindow(QMainWindow):
             'y_end': orig_y2,
             'scale_factor': scale_factor
         }
-        
-        # Update UI state
+        print(f"[DEBUG] Original Image Size: {orig_width}x{orig_height}")
+        print(f"[DEBUG] Zoomed Region: x={orig_x1}:{orig_x2}, y={orig_y1}:{orig_y2}")
+        print(f"[DEBUG] Selected Region Shape: {selected_region.shape}")
+        print(f"[DEBUG] View Size: {view_width}x{view_height}")
+        print(f"[DEBUG] Computed scale factor: {scale_factor}")
+        self.resized_image = cv2.resize(
+            selected_region, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR
+        )
+
         self.reset_zoom_button.setEnabled(True)
-        self.display_image()
-        
-        # Clear any cached coordinates since we have a new zoom level
-        if hasattr(self, 'visible_gene_x_coords'):
-            delattr(self, 'visible_gene_x_coords')
-        if hasattr(self, 'visible_gene_y_coords'):
-            delattr(self, 'visible_gene_y_coords')
-        if hasattr(self, 'visible_gene_colors'):
-            delattr(self, 'visible_gene_colors')
-        if hasattr(self, 'cell_center_x_coords'):
-            delattr(self, 'cell_center_x_coords')
-        if hasattr(self, 'cell_center_y_coords'):
-            delattr(self, 'cell_center_y_coords')
-        
-        # Determine what to display based on available data and settings
-        if self.gene_data is not None and self.selected_genes and self.show_cell_centers:
-            # If both genes and cell centers should be shown
-            self.overlay_genes()  # This will now also draw cell centers
-        elif self.gene_data is not None and self.selected_genes:
-            # If only genes should be shown
-            self.overlay_genes()
-        elif self.show_cell_centers:
-            # If only cell centers should be shown
-            self.display_cell_centers()
-        
+
+        for attr in ['visible_gene_x_coords', 'visible_gene_y_coords', 'visible_gene_colors',
+                    'cell_center_x_coords', 'cell_center_y_coords']:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        # ✅ Delay update until current_zoom is fully ready
+        QTimer.singleShot(0, self.update_display)
+
+        # Re-overlay gene data
+        if self.gene_data is not None and self.selected_genes:
+            QTimer.singleShot(0, self.overlay_genes)
+
         self.status_bar.showMessage(f"Zoomed to region. Zoom level: {len(self.zoom_history) + 1}")
+        print(f"[DEBUG] Applying zoom: {self.current_zoom}")
+
     
     def get_pixmap_rect(self):
         """Calculate the actual rectangle of the pixmap within the label"""
@@ -539,13 +807,11 @@ class MainWindow(QMainWindow):
             )
             
             # Clear zoom state and history
-            if hasattr(self, 'current_zoom'):
-                self.current_zoom = None
             self.zoom_history = []
+            self.current_zoom = None
             
             # Update UI
             self.reset_zoom_button.setEnabled(False)  # Disable since we're at base zoom
-            self.display_image()
             
             # Store the scale factor for use in overlay_genes
             self.full_view_scale_factor = scale_factor
@@ -562,11 +828,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'cell_center_y_coords'):
                 delattr(self, 'cell_center_y_coords')
             # Call overlay_genes to redraw genes if data exists
-            if self.gene_data is not None and hasattr(self, 'selected_genes') and self.selected_genes:
+            self.update_display()
+            if self.gene_data is not None and self.selected_genes:
                 self.overlay_genes()
-            # If no genes but showing cell centers, display them
-            elif self.show_cell_centers:
-                self.display_cell_centers()
                 
             self.status_bar.showMessage("View reset to original")
 
@@ -777,7 +1041,7 @@ class MainWindow(QMainWindow):
         if filtered_data.empty:
             self.status_bar.showMessage("No selected genes to overlay.")
             # Display the original resized image without any overlay
-            self.display_image()
+            # self.display_image()
             
             # Check if cell centers need to be displayed
             if self.show_cell_centers:
@@ -818,7 +1082,7 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("No genes in the zoomed region")
                 
                 # Still display the zoomed image
-                self.display_image()
+                # self.display_image()
                 
                 # Check if cell centers need to be displayed
                 if self.show_cell_centers:
@@ -875,22 +1139,18 @@ class MainWindow(QMainWindow):
         self.visible_gene_y_coords = y_coords
         self.visible_gene_colors = colors
 
-        # Draw visible genes
-        for x, y, color in zip(x_coords, y_coords, colors):
-            color = tuple(map(int, color))
-            color = (color[2], color[1], color[0])  # Convert RGB to BGR for OpenCV
-            cv2.circle(overlay_image, (x, y), 1, color, -1)
+        # # Draw visible genes
+        # for x, y, color in zip(x_coords, y_coords, colors):
+        #     color = tuple(map(int, color))
+        #     color = (color[2], color[1], color[0])  # Convert RGB to BGR for OpenCV
+        #     cv2.circle(overlay_image, (x, y), 1, color, -1)
 
-        # Check if cell centers need to be displayed
-        if self.show_cell_centers:
-            self._draw_cell_centers(overlay_image)
-        else:
-            # Convert image for display
-            overlay_image_rgb = cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
-            height, width, channel = overlay_image_rgb.shape
-            bytes_per_line = 3 * width
-            q_img = QImage(overlay_image_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
-            self.image_label.setPixmap(QPixmap.fromImage(q_img))
+        # # Check if cell centers need to be displayed
+        # if self.show_cell_centers:
+        #     self._draw_cell_centers(overlay_image)
+        # else:
+        #     # Convert image for display
+        self.update_display()
             
         self.status_bar.showMessage(f"Genes overlaid: {len(x_coords)} visible points")
 
