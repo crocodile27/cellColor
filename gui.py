@@ -261,8 +261,25 @@ class MainWindow(QMainWindow):
             else:
                 print("Generating outlines...")
                 self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
+                
+                # --- NEW: after you have self.cellpose_outlines as list of [ [x,y],… ] ---
+                h_img, w_img = self.original_image.shape[:2]
+                h_m, w_m = self.cellpose_masks.shape
+                scale_x = w_img / w_m
+                scale_y = h_img / h_m
+
+                print(f"Scaling {len(self.cellpose_outlines)} outlines by (x={scale_x:.3f}, y={scale_y:.3f})")
+                scaled = []
+                for outline in self.cellpose_outlines:
+                    pts = np.array(outline)
+                    # multiply then cast back to int
+                    pts_scaled = [(int(x * scale_x), int(y * scale_y)) for x, y in pts]
+                    if len(pts_scaled) > 1:
+                        scaled.append(pts_scaled)
+                self.cellpose_outlines = scaled
+                
                 np.save(outline_path, np.array(self.cellpose_outlines, dtype=object))
-                print(f"Outlines saved to {outline_path}")
+                print(f"Saved scaled outlines to {outline_path}")
         else:
             print("No base path found; computing outlines without caching.")
             self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
@@ -274,6 +291,11 @@ class MainWindow(QMainWindow):
         self.update_display()
         
     def load_cellpose_masks(self):
+        
+        if self.original_image is None:
+            self.status_bar.showMessage("Please make sure to upload an image to scale to.")
+            return
+        
         file_name, _ = QFileDialog.getOpenFileName(self, "Open Cellpose Masks", "", "NumPy Files (*.npy)")
         if not file_name:
             return
@@ -303,9 +325,21 @@ class MainWindow(QMainWindow):
                     indices = self.cellpose_masks.astype(np.int32)
                     self.cellpose_mask_color_image = color_lut[indices].astype(np.uint8)
                     # Save for future use
+                
+                h_img, w_img = self.original_image.shape[:2]
+                h_m, w_m = self.cellpose_mask_color_image.shape[:2]
+                if (h_img, w_img) != (h_m, w_m):
+                    print(f"Scaling mask color from {(h_m, w_m)} → {(h_img, w_img)}")
+                    self.cellpose_mask_color_image = cv2.resize(
+                        self.cellpose_mask_color_image,
+                        (w_img, h_img),
+                        interpolation=cv2.INTER_NEAREST
+                    )
+                    # overwrite cache so next load is already scaled
                     np.save(color_path, self.cellpose_mask_color_image)
-                    print(f"Saved color image to {color_path}")
+                    print(f"Resaved scaled color image to {color_path}")
 
+                # … then queue outline generation as before …
                 self.status_bar.showMessage("Generating Cellpose outlines... this may take a moment")
                 QTimer.singleShot(100, self._generate_outlines_and_update)
 
@@ -328,11 +362,11 @@ class MainWindow(QMainWindow):
         self.update_display()
     
     def update_display(self):
+        print("Running update display")
         if self.resized_image is None:
             return
-        
         base_image = self.resized_image.copy()
-
+        print('Resized image size:', self.resized_image.shape[0], self.resized_image.shape[1])
         # Overlay genes
         if hasattr(self, 'visible_gene_x_coords'):
             for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
@@ -356,77 +390,13 @@ class MainWindow(QMainWindow):
         height, width, channel = overlay_image_rgb.shape
         q_img = QImage(overlay_image_rgb.data, width, height, 3 * width, QImage.Format_RGB888)
         self.image_label.setPixmap(QPixmap.fromImage(q_img))
-        if hasattr(self, 'current_zoom'):
-            print(f"[DEBUG] Applying zoom: {self.current_zoom}")
-        else:
-            print("[DEBUG] No zoom active")
-        
-    def _draw_cellpose_masks(self, image):
-        if self.cellpose_masks is None:
-            return
 
-        if hasattr(self, 'current_zoom') and self.current_zoom is not None:
-            # We're zoomed in — crop the mask
-            zoom = self.current_zoom
-            crop = self.cellpose_masks[zoom['y_start']:zoom['y_end'], zoom['x_start']:zoom['x_end']]
-            scale_factor = zoom['scale_factor']
-        else:
-            # Use full mask
-            crop = self.cellpose_masks
-            scale_factor = self.full_view_scale_factor
-
-        # Resize cropped mask to current view size
-        resized_masks = cv2.resize(
-            crop.astype(np.uint16),
-            (image.shape[1], image.shape[0]),
-            interpolation=cv2.INTER_NEAREST
-        )
-
-        for mask_id in np.unique(resized_masks):
-            if mask_id == 0:
-                continue
-            mask_area = resized_masks == mask_id
-            color_idx = (mask_id - 1) % len(self.cellpose_colors)
-            color_bgr = self.cellpose_colors[color_idx][::-1]
-            color_array = np.tile(color_bgr, (np.count_nonzero(mask_area), 1)).astype(np.uint8)
-            original_pixels = image[mask_area]
-            
-            blended = cv2.addWeighted(original_pixels, 0.5, color_array, 0.5, 0)
-            image[mask_area] = blended
-
-        # Draw outlines (from full image, but scaled)
-        if self.current_zoom:
-            zoom = self.current_zoom
-            scale_x = image.shape[1] / (zoom['x_end'] - zoom['x_start'])
-            scale_y = image.shape[0] / (zoom['y_end'] - zoom['y_start'])
-        else:
-            scale_x = image.shape[1] / self.cellpose_masks.shape[1]
-            scale_y = image.shape[0] / self.cellpose_masks.shape[0]
-
-        for outline in self.cellpose_outlines:
-            if hasattr(self, 'current_zoom') and self.current_zoom is not None:
-                # Filter to outlines within the zoomed crop
-                outline = np.array(outline)
-                outline = outline[:, [1, 0]]  # Flip (y, x) to (x, y)
-                in_x = (outline[:, 0] >= zoom['x_start']) & (outline[:, 0] < zoom['x_end'])
-                in_y = (outline[:, 1] >= zoom['y_start']) & (outline[:, 1] < zoom['y_end'])
-                valid = in_x & in_y
-                if not np.any(valid):
-                    continue
-                outline = outline[valid]
-                outline = outline - np.array([zoom['x_start'], zoom['y_start']])
-            else:
-                outline = np.array(outline)
-                outline = outline[:, [1, 0]]  # Flip (y, x) to (x, y)
-
-            outline_scaled = np.array([[int(x * scale_x), int(y * scale_y)] for x, y in outline])
-            if len(outline_scaled) > 1:
-                cv2.polylines(image, [outline_scaled], isClosed=True, color=(0, 0, 255), thickness=1)
 
     def _draw_cellpose_mask_fill(self, image):
+
         if not hasattr(self, 'cellpose_mask_color_image'):
             return
-
+        print(f"Cellpose mask image dimensions: {self.cellpose_mask_color_image.shape}")
         if hasattr(self, 'current_zoom') and self.current_zoom is not None:
             zoom = self.current_zoom
             crop = self.cellpose_mask_color_image[
@@ -439,6 +409,7 @@ class MainWindow(QMainWindow):
         if crop.size == 0:
             print("[Error] Zoomed-in region is empty — skipping mask fill.")
             return
+        print(f"question about image width and height, width should be larger or else, this is flipped.Width:{image.shape[1]}, height:{image.shape[0]}" )
         resized = cv2.resize(crop, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
 
         # Force both images to be np.uint8
@@ -531,10 +502,13 @@ class MainWindow(QMainWindow):
                 return
             x_coords, y_coords = (x_coords[in_zoom] - zoom['x_start']) * zoom['scale_factor'], \
                                 (y_coords[in_zoom] - zoom['y_start']) * zoom['scale_factor']
+            
         else:
             scale_factor = getattr(self, 'full_view_scale_factor', None) or min(
                 self.image_label.height() / self.original_image.shape[0],
                 self.image_label.width() / self.original_image.shape[1])
+            print(f"image label height{self.image_label.height()}, original image height{self.original_image.shape[0]}, scale factor = {self.image_label.height() / self.original_image.shape[0]}")
+            print(f"image label width: {self.image_label.width()}, original image width: {self.original_image.shape[1]}, scale factor = {self.image_label.width() / self.original_image.shape[1]}")
             x_coords, y_coords = x_coords * scale_factor, y_coords * scale_factor
         
         x_coords, y_coords = x_coords.astype(int), y_coords.astype(int)
