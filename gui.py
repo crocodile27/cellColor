@@ -262,21 +262,21 @@ class MainWindow(QMainWindow):
                 print("Generating outlines...")
                 self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
                 
-                # --- NEW: after you have self.cellpose_outlines as list of [ [x,y],… ] ---
-                h_img, w_img = self.original_image.shape[:2]
-                h_m, w_m = self.cellpose_masks.shape
-                scale_x = w_img / w_m
-                scale_y = h_img / h_m
+                # # # --- NEW: after you have self.cellpose_outlines as list of [ [x,y],… ] ---
+                # # h_img, w_img = self.original_image.shape[:2]
+                # # h_m, w_m = self.cellpose_masks.shape
+                # # scale_x = w_img / w_m
+                # # scale_y = h_img / h_m
 
-                print(f"Scaling {len(self.cellpose_outlines)} outlines by (x={scale_x:.3f}, y={scale_y:.3f})")
-                scaled = []
-                for outline in self.cellpose_outlines:
-                    pts = np.array(outline)
-                    # multiply then cast back to int
-                    pts_scaled = [(int(x * scale_x), int(y * scale_y)) for x, y in pts]
-                    if len(pts_scaled) > 1:
-                        scaled.append(pts_scaled)
-                self.cellpose_outlines = scaled
+                # print(f"Scaling {len(self.cellpose_outlines)} outlines by (x={scale_x:.3f}, y={scale_y:.3f})")
+                # scaled = []
+                # for outline in self.cellpose_outlines:
+                #     pts = np.array(outline)
+                #     # multiply then cast back to int
+                #     pts_scaled = [(int(x * scale_x), int(y * scale_y)) for x, y in pts]
+                #     if len(pts_scaled) > 1:
+                #         scaled.append(pts_scaled)
+                # self.cellpose_outlines = scaled
                 
                 np.save(outline_path, np.array(self.cellpose_outlines, dtype=object))
                 print(f"Saved scaled outlines to {outline_path}")
