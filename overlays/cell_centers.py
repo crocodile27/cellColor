@@ -44,12 +44,7 @@ class CellCentersMixin:
 
         x_coords, y_coords = self.cell_centers[['global_x', 'global_y']].to_numpy().T
 
-        if self.transformation_matrix is not None:
-            coords = np.dot(
-                self.transformation_matrix,
-                np.hstack([x_coords[:, None], y_coords[:, None], np.ones((len(x_coords), 1))]).T
-            ).T[:, :2]
-            x_coords, y_coords = coords[:, 0], coords[:, 1]
+        
 
         if getattr(self, 'current_zoom', None):
             zoom = self.current_zoom
@@ -107,9 +102,6 @@ class CellCentersMixin:
         if cell_centers is None or cell_centers.empty:
             self.status_bar.showMessage("No cell centers loaded")
             return
-        if self.transformation_matrix is None:
-            self.status_bar.showMessage("Please load transformation matrix first")
-            return
         if self.image is None or self.resized_image is None:
             self.status_bar.showMessage("Please load an image first")
             return
@@ -136,6 +128,9 @@ class CellCentersMixin:
 
 
     def load_anndata(self):
+        if self.transformation_matrix is None:
+            self.status_bar.showMessage("Please load transformation matrix first")
+            return
         file_name, _ = QFileDialog.getOpenFileName(
             self, "Open Anndata File", "", "Anndata Files (*.h5ad);"
             "All Files (*)")
@@ -145,58 +140,92 @@ class CellCentersMixin:
             QTimer.singleShot(0, lambda: self.process_anndata(file_name))
             
     def process_anndata(self, file_name):
-        """Process anndata file to extract cell centers"""
+        """Process anndata file to extract cell centers and cluster annotations"""
         try:
+
             adata = ad.read_h5ad(file_name)
             self.status_bar.showMessage("AnnData loaded successfully")
             
-            # Check for spatial coordinates in different possible locations
-            if 'spatial' in adata.obsm:
-                cell_coords = adata.obsm['spatial']
-                x_coords = cell_coords[:, 0]
-                y_coords = cell_coords[:, 1]
-            elif 'X_spatial' in adata.obsm:
-                cell_coords = adata.obsm['X_spatial']
-                x_coords = cell_coords[:, 0]
-                y_coords = cell_coords[:, 1]
-            elif 'center_x' in adata.obs and 'center_y' in adata.obs:
-                x_coords = adata.obs['center_x'].values
-                y_coords = adata.obs['center_y'].values
-            elif 'x' in adata.obs and 'y' in adata.obs:
-                x_coords = adata.obs['x'].values
-                y_coords = adata.obs['y'].values
-            else:
-                # Last resort: try to find any columns that might contain coordinates
-                potential_x_cols = [col for col in adata.obs.columns if 'x' in col.lower()]
-                potential_y_cols = [col for col in adata.obs.columns if 'y' in col.lower()]
-                
-                if potential_x_cols and potential_y_cols:
-                    x_coords = adata.obs[potential_x_cols[0]].values
-                    y_coords = adata.obs[potential_y_cols[0]].values
-                    self.status_bar.showMessage(f"Using columns '{potential_x_cols[0]}' and '{potential_y_cols[0]}' for coordinates")
-                else:
-                    self.status_bar.showMessage("Could not find cell center coordinates in AnnData file")
-                    return
             
-            # Create DataFrame to store cell centers
+            # --- Extract coordinates ---
+            x_coords = y_coords = None
+            # Try common obsm keys
+            for key in ['spatial', 'X_spatial']:
+                if key in adata.obsm:
+                    cell_coords = adata.obsm[key]
+                    x_coords, y_coords = cell_coords[:, 0], cell_coords[:, 1]
+                    break
+            # Try common obs columns
+            if x_coords is None or y_coords is None:
+                for x_key, y_key in [('center_x', 'center_y'), ('x', 'y')]:
+                    if x_key in adata.obs and y_key in adata.obs:
+                        x_coords, y_coords = adata.obs[x_key].values, adata.obs[y_key].values
+                        break
+            # Try any columns with 'x' and 'y' in their names
+            if x_coords is None or y_coords is None:
+                x_cols = [col for col in adata.obs.columns if 'x' in col.lower()]
+                y_cols = [col for col in adata.obs.columns if 'y' in col.lower()]
+                if x_cols and y_cols:
+                    x_coords, y_coords = adata.obs[x_cols[0]].values, adata.obs[y_cols[0]].values
+                    self.status_bar.showMessage(
+                        f"Using columns '{x_cols[0]}' and '{y_cols[0]}' for coordinates"
+                    )
+            if x_coords is None or y_coords is None:
+                self.status_bar.showMessage("Could not find cell center coordinates in AnnData file")
+                return
+
+            # --- Extract cluster/type columns ---
+            potential_cluster_cols = ["leiden", "cluster", "type", "celltype"]
+            cluster_cols = [col for col in adata.obs.columns if col.lower() in potential_cluster_cols]
+            cluster = []
+            if cluster_cols:
+                col = cluster_cols[0]
+                cluster = adata.obs[col].values
+            else:
+                cluster = []
+
+            if self.transformation_matrix is not None:
+                coords = np.dot(
+                    self.transformation_matrix,
+                    np.hstack([x_coords[:, None], y_coords[:, None], np.ones((len(x_coords), 1))]).T
+                ).T[:, :2]
+                x_coords, y_coords = coords[:, 0], coords[:, 1]
+                
+            # --- Store everything in DataFrame ---
             self.cell_centers = pd.DataFrame({
-                'global_x': x_coords,
-                'global_y': y_coords
+                "global_x": x_coords,
+                "global_y": y_coords,
+                "cluster": cluster
             })
             
             num_cells = len(self.cell_centers)
-            self.status_bar.showMessage(f"Loaded {num_cells} cell centers from AnnData file")
+            self.status_bar.showMessage(
+                f"Loaded {num_cells} cell centers and {cluster_cols[0]} cluster annotations from AnnData"
+            )
             
+            if self.cellpose_masks is not None:
+                print("Making cluster data after loading cell centers")
+                self.make_cluster_data()
+                
+            # --- Populate dropdown with available unique clusters ---
+            unique_clusters = cluster.unique()
+            self.cluster_dropdown.clear()
+            if cluster_cols:
+                self.cluster_dropdown.addItems(unique_clusters)
+            else:
+                self.cluster_dropdown.addItem("No cluster annotations found")
+
             # Enable the cell centers button
             self.toggle_cell_centers_button.setEnabled(True)
-            
-            # If already toggled to show cells and we have an image, display them
-            cell_centers = getattr(self, 'cell_centers', None)
-            if (cell_centers is not None and not cell_centers.empty) and (self.image is not None):
+
+            # Display centers if toggled on
+            if (self.cell_centers is not None and not self.cell_centers.empty) and (self.image is not None):
                 self.display_cell_centers()
                 
+            
+
         except ImportError:
-            self.status_bar.showMessage("Please install the 'anndata' package to load AnnData files using `pip install anndata`")
+            self.status_bar.showMessage("Please install the 'anndata' package: `pip install anndata`")
         except Exception as e:
             self.status_bar.showMessage(f"Error processing AnnData file: {str(e)}")
             print(f"Error processing AnnData file: {str(e)}")
