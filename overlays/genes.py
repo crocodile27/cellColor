@@ -1,10 +1,9 @@
-import random
+
 import numpy as np
 import pandas as pd
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QFileDialog
 from PyQt5.QtCore import QTimer
 import cv2
-from .colors import colors_rgb
 
 class GenesMixin:
     def load_detected_transcripts(self):
@@ -108,14 +107,7 @@ class GenesMixin:
                         return
         self.overlay_genes()
 
-    def generate_unique_color(self):
-        available_colors = [
-            value for value in colors_rgb.values()
-            if value not in self.selected_genes.values()
-        ]
-        if not available_colors:
-            return random.choice(list(colors_rgb.values()))
-        return random.choice(available_colors)
+    
 
     def overlay_genes(self):
         """Overlay selected genes on the current image."""

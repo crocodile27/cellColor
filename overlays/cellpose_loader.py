@@ -62,6 +62,11 @@ class CellposeMixin:
         self.toggle_cellpose_button.setEnabled(True)
         self.toggle_cellpose_outline_button.setEnabled(True)
         self.status_bar.showMessage("Cellpose masks loaded successfully")
+        if (self.cell_centers is not None) and (not self.cell_centers.empty):
+            print("making cluster data after loading cellpose masks")
+            self.make_cluster_data()
+            print("finished clustering data after loading cellpose masks")
+            
         self.update_display()
         
     def load_cellpose_masks(self):
@@ -97,6 +102,18 @@ class CellposeMixin:
                     # Save for future use
                 
                 h_img, w_img = self.original_image.shape[:2]
+                # Scale the cellpose masks
+                print("before scaling cellpose mask dimension:", self.cellpose_masks.shape[:2])
+                h_cm, w_cm = self.cellpose_masks.shape[:2]
+                if (h_img, w_img) != (h_cm, w_cm):
+                    self.cellpose_masks = cv2.resize(
+                        self.cellpose_masks,
+                        (w_img, h_img),
+                        interpolation=cv2.INTER_NEAREST
+                    )
+                print("after scaling cellpose mask dimension:", self.cellpose_masks.shape[:2])
+                
+                # Scale the color image
                 h_m, w_m = self.cellpose_mask_color_image.shape[:2]
                 if (h_img, w_img) != (h_m, w_m):
                     self.cellpose_mask_color_image = cv2.resize(
