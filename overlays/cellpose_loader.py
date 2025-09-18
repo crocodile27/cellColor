@@ -57,16 +57,12 @@ class CellposeMixin:
                 
         else:
             self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
-
-
         self.toggle_cellpose_button.setEnabled(True)
         self.toggle_cellpose_outline_button.setEnabled(True)
-        self.status_bar.showMessage("Cellpose masks loaded successfully")
-        if (self.cell_centers is not None) and (not self.cell_centers.empty):
-            print("making cluster data after loading cellpose masks")
-            self.make_cluster_data()
-            print("finished clustering data after loading cellpose masks")
-            
+        
+        if self.cell_centers is not None:
+            self.make_cluster_button.setEnabled(True)
+        self.status_bar.showMessage("Cellpose masks loaded successfully")   
         self.update_display()
         
     def load_cellpose_masks(self):

@@ -217,7 +217,9 @@ class CellCentersMixin:
 
             # Enable the cell centers button
             self.toggle_cell_centers_button.setEnabled(True)
-
+            if self.cellpose_masks is not None:
+                #require both to be uploaded in order to make the cluster masks.
+                self.make_cluster_button.setEnabled(True)
             # Display centers if toggled on
             if (self.cell_centers is not None and not self.cell_centers.empty) and (self.image is not None):
                 self.display_cell_centers()
