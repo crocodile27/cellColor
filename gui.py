@@ -111,6 +111,13 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.toggle_cellpose_outline_button.setEnabled(False)
         self.toolbar_layout.addWidget(self.toggle_cellpose_outline_button)
 
+        # Make Cluster Button
+        self.make_cluster_button = QPushButton("Make Cluster Masks")
+        self.make_cluster_button.setCheckable(True)
+        self.make_cluster_button.clicked.connect(self.make_cluster_data)
+        self.make_cluster_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.make_cluster_button)
+
         # Outline visibility state
         self.show_cellpose_outlines = False
 
