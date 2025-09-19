@@ -202,10 +202,6 @@ class CellCentersMixin:
             self.status_bar.showMessage(
                 f"Loaded {num_cells} cell centers and {cluster_cols[0]} cluster annotations from AnnData"
             )
-            
-            if self.cellpose_masks is not None:
-                print("Making cluster data after loading cell centers")
-                self.make_cluster_data()
                 
             # --- Populate dropdown with available unique clusters ---
             unique_clusters = cluster.unique()
