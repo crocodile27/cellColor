@@ -221,7 +221,11 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-
+        # Dimensions
+        self.view_height = self.image_label.height()
+        self.view_width = self.image_label.width()
+        self.orig_height = None
+        self.orig_width = None
         # Data Storage
         self.cluster_mask = None
         self.image = None
@@ -337,81 +341,102 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.overlay_clusters()
 
     def make_cluster_data(self):
-        """Create cluster image masks with cluster,x,y data from anndata and cellpose mask indexs from cellpose masks"""
-        # Step 1: Create a dictionary for mask index to cluster type in anndata
-        dict_index_to_cluster = {}
-        # loop through all anndata cell centers, retrieve the index and assign each index to the right cluster.
-        print('make sure they are the same dimensions')
-        print('masks:', self.cellpose_masks.shape)
-        print('color_image', self.cellpose_mask_color_image.shape)
-        
-        print(max(self.cell_centers['global_x']), max(self.cell_centers['global_y']))
-        
-        for _, cell_center in self.cell_centers.iterrows():
-            curr_index = self.cellpose_masks[int(cell_center['global_x']), int(cell_center['global_y'])]
-            dict_index_to_cluster[curr_index] = cell_center['cluster']
+        """
+        Vectorized mapping from cellpose mask index -> cluster id.
+        Stores result in self.cluster_mask (int32).
+        """
+        # Remove debug prints in production (they slow things down).
+        # Get cell center arrays and clamp to image bounds
+        xs = self.cell_centers['global_x'].to_numpy().astype(np.intp)
+        ys = self.cell_centers['global_y'].to_numpy().astype(np.intp)
+        clusters = self.cell_centers['cluster'].to_numpy().astype(np.int32)
 
-        # Step 2: Create a mask where each pixel's value is the cluster id, or 0 if not in dict
-        
-        # Initialize the mask
-        mask_shape = self.cellpose_masks.shape
-        cluster_mask = np.zeros(mask_shape, dtype=np.int32)
-        print("Finished initializing mask")
-        # Vectorized mapping: create a lookup array for mask indices
+        H, W = self.cellpose_masks.shape
+
+        # ensure coords are in bounds (clip avoids IndexError)
+        xs = np.clip(xs, 0, H - 1)
+        ys = np.clip(ys, 0, W - 1)
+
+        # Vectorized fetch of mask indices for all centers at once
+        mask_indices = self.cellpose_masks[xs, ys]   # keep same indexing convention as your original code
+
+        # Build lookup table (index -> cluster). Use max on the mask once.
         max_index = int(self.cellpose_masks.max())
-        
         lookup = np.zeros(max_index + 1, dtype=np.int32)
-        for idx, cluster in dict_index_to_cluster.items():
-            if idx > 0 and idx <= max_index:
-                lookup[int(idx)] = int(cluster)
 
-        # Map mask indices to cluster ids
-        cluster_mask = lookup[self.cellpose_masks.astype(np.int32)]
-        print('First row of cluster mask', cluster_mask[0])
-        print('sum of row of cluster mask', sum(cluster_mask[1]))
-        
-        self.cluster_mask = cluster_mask
+        # Only set for valid indices (ignore background 0 and out-of-range)
+        valid = (mask_indices > 0) & (mask_indices <= max_index)
+        if np.any(valid):
+            # np.put is vectorized and avoids Python loops
+            np.put(lookup, mask_indices[valid].astype(np.intp), clusters[valid].astype(np.int32))
+
+        # Map whole mask at once
+        # np.take is slightly faster and explicit about indexing
+        self.cluster_mask = np.take(lookup, self.cellpose_masks.astype(np.int32))
+
         return
+
         
     def _draw_cluster_mask(self, base_image):
-        """Overlay selected clusters on the current image."""
+        """
+        Create a colored overlay for selected clusters and blend with base_image.
+        Improvements:
+        - Crop before coloring (if zoomed) to avoid full-image allocation.
+        - Use a small colors lookup and vectorized indexing to build the RGB crop.
+        """
         if not hasattr(self, 'cluster_mask') or self.cluster_mask is None or not self.selected_clusters:
             return
-        print('drawing cluster on mask')
-        
-        # Prepare a color image for the cluster mask
+
         mask = self.cluster_mask
-        color_mask = np.zeros((*mask.shape, 3), dtype=np.uint8)
 
-        # Assign colors to selected clusters
-        for cluster, color in self.selected_clusters.items():
-            print(f'Cluster {cluster} was selected and given color {color}')
-            cluster_id = int(cluster)
-            color_mask[mask == cluster_id] = color  # color is (r, g, b)
-
-        # Handle zoom/crop
+        # Crop according to zoom (do this early so we only color a small area)
         if hasattr(self, 'current_zoom') and self.current_zoom is not None:
-            zoom = self.current_zoom
-            crop = color_mask[
-                zoom['y_start']:zoom['y_end'],
-                zoom['x_start']:zoom['x_end']
-            ]
+            z = self.current_zoom
+            y0, y1 = z['y_start'], z['y_end']
+            x0, x1 = z['x_start'], z['x_end']
+            mask_crop = mask[y0:y1, x0:x1]
         else:
-            crop = color_mask
+            mask_crop = mask
 
-        if crop.size == 0:
+        if mask_crop.size == 0:
             return
 
-        # Resize to match base_image
-        resized = cv2.resize(crop, (base_image.shape[1], base_image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        # If only a few clusters are selected and mask_crop is large,
+        # using boolean assignment per-cluster can be faster/memory-savvier than building a huge colors_lookup.
+        sel_ids = [int(k) for k in self.selected_clusters.keys()]
 
-        # Blend with base image
+        # Strategy A: vectorized lookup for compact max cluster id (fast if max cluster id small)
+        max_cluster_id = int(mask_crop.max())
+        if max_cluster_id <= 5000:  # heuristic: avoid huge lookup arrays if cluster ids are sparse and very large
+            colors_lookup = np.zeros((max_cluster_id + 1, 3), dtype=np.uint8)
+            for cid, color in self.selected_clusters.items():
+                cid = int(cid)
+                if 0 <= cid <= max_cluster_id:
+                    colors_lookup[cid] = color  # color should be (r,g,b)
+            color_crop = colors_lookup[mask_crop]
+        else:
+            # Strategy B: allocate minimal RGB crop and paint cluster-by-cluster (better for sparse large ids)
+            color_crop = np.zeros((*mask_crop.shape, 3), dtype=np.uint8)
+            for cid, color in self.selected_clusters.items():
+                cid = int(cid)
+                if cid == 0:
+                    continue
+                # boolean mask on the cropped region only
+                sel = (mask_crop == cid)
+                if sel.any():
+                    color_crop[sel] = color
+
+        # Resize to base_image shape and blend
+        resized = cv2.resize(color_crop, (base_image.shape[1], base_image.shape[0]),
+                            interpolation=cv2.INTER_NEAREST)
+
+        # Ensure correct dtype and in-place blending
         if resized.dtype != np.uint8:
             resized = resized.astype(np.uint8)
         if base_image.dtype != np.uint8:
             base_image[:] = base_image.astype(np.uint8)
+
         cv2.addWeighted(base_image, 0.5, resized, 0.5, 0, dst=base_image)
-        print('finished adding clusters')
        
         
 

@@ -1,78 +1,77 @@
+import os
 import cv2
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QFileDialog, QProgressDialog
 from PyQt5.QtCore import Qt, QCoreApplication, QTimer
+from PyQt5.QtWidgets import QMessageBox
 
 class ImageMixin:
     """Mixin for Image loading"""
+
+
     def load_image(self):
-        self.status_bar.showMessage(f"Checking Image...")
+        self.status_bar.showMessage("Checking Image...")
         file_name, _ = QFileDialog.getOpenFileName(
-            self, "Open Image File", "", "Images (*.png *.jpg *.bmp *.tif *.tiff)")
-        self.status_bar.showMessage(f"Opening File...")
+            self, "Open Image File", "", "Images (*.png *.jpg *.bmp *.tif *.tiff)"
+        )
+        self.status_bar.showMessage("Opening File...")
+
         if file_name:
-            self.status_bar.showMessage("Processing...")
-            QTimer.singleShot(100, lambda: self.process_image(file_name))
-
-
-    def process_image(self, file_name):
-        progress = QProgressDialog("Loading image...", "Cancel", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-        progress.show()
-        QCoreApplication.processEvents()
-
-        try:
-            # Step 1: File name selected
-            progress.setValue(10)
-            QCoreApplication.processEvents()
-
-            # Step 2: Reading image
-            if file_name.lower().endswith(('.tif', '.tiff')):
-                print(f"Reading image, {file_name}")
-                self.image = cv2.imread(file_name)
+            root, ext = os.path.splitext(file_name)
+            downsized_path = f"{root}_downsizedby4{ext}"
+            print(downsized_path)
+            # --- Priority 1: load downsized if already exists ---
+            if os.path.exists(downsized_path):
+                print('found')
+                self.status_bar.showMessage("Loading downsized image...")
+                self.original_image = cv2.imread(downsized_path)
             else:
+                # --- Otherwise load full image ---
+                self.status_bar.showMessage("Loading full image...")
+                print('loaded full image')
                 self.image = cv2.imread(file_name)
-            progress.setValue(40)
-            QCoreApplication.processEvents()
-
-            # Step 3: Copy original image
-            if self.image is not None:
                 self.original_image = self.image.copy()
-                progress.setValue(60)
-                QCoreApplication.processEvents()
 
-                # Step 4: Reset zoom and resize
-                self.reset_zoom_button.setEnabled(False)
-                self.do_full_reset()
-                progress.setValue(80)
-                QCoreApplication.processEvents()
+                # Check if it’s huge -> downsize & save
+                if self.image.shape[0] > 10000 or self.image.shape[1] > 10000:
+                    downsized_path = self.downsize_image(file_name)  # should save file
+                    self.show_downsize_message(downsized_path)
+                    self.image = cv2.imread(downsized_path)  # switch to downsized for working
 
-                # Step 5: Overlay genes if available
-                if self.gene_data is not None:
-                    self.overlay_genes()
-                progress.setValue(90)
-                QCoreApplication.processEvents()
+            # --- Post-load GUI reset ---
+            self.reset_zoom_button.setEnabled(False)
+            self.do_full_reset()
 
-                self.status_bar.showMessage("Image loaded and resized successfully")
-            else:
-                self.status_bar.showMessage("Failed to load image")
-                progress.setValue(100)
-                QCoreApplication.processEvents()
-                return
+            if self.gene_data is not None:
+                self.overlay_genes()
 
-            progress.setValue(100)
-            QCoreApplication.processEvents()
+            self.status_bar.showMessage("Image loaded successfully")
 
-        except Exception as e:
-            self.status_bar.showMessage(f"Error loading image: {str(e)}")
-            print(f"Error loading image: {str(e)}")
-            progress.setValue(100)
-            QCoreApplication.processEvents()
-        finally:
-            progress.close()
+  
+    
+    def downsize_image(self, file_path):
+        # Load the original image
+        self.original_image = cv2.imread(file_path)
+        orig_height, orig_width = self.original_image.shape[:2]
 
+        # Scale factor
+        scale_factor = 0.25
+        new_width = int(orig_width * scale_factor)
+        new_height = int(orig_height * scale_factor)
+
+        # Resize
+        downsized_image = cv2.resize(
+            self.original_image,
+            (new_width, new_height),
+            interpolation=cv2.INTER_LINEAR
+        )
+
+        # Save downsized file in same folder
+        root, ext = os.path.splitext(file_path)
+        downsized_path = f"{root}_downsizedby4{ext}"
+        cv2.imwrite(downsized_path, downsized_image)
+
+        return downsized_path
 
     def display_image(self):
         if self.resized_image is not None:
@@ -109,30 +108,18 @@ class ImageMixin:
     def do_full_reset(self):
             """Reset to original unzoomed state"""
             if self.original_image is not None:
-                # Get the current dimensions of the image display area
-                view_height = self.image_label.height()
-                view_width = self.image_label.width()
+                self.view_height = self.image_label.height()
+                self.view_width = self.image_label.width()
+                self.orig_height, self.orig_width = self.original_image.shape[:2]
+                scale_factor = min(self.view_height / self.orig_height, self.view_width / self.orig_width)
+                new_width = int(self.orig_width * scale_factor)
+                new_height = int(self.orig_height * scale_factor)
                 
-                # If dimensions are too small, use minimum reasonable values
-                if view_height < 100 or view_width < 100:
-                    view_height = max(view_height, 600)
-                    view_width = max(view_width, 800)
-                
-                # Get original image dimensions
-                orig_height, orig_width = self.original_image.shape[:2]
-                
-                # Calculate scale factor to fit the image in the view while maintaining aspect ratio
-                scale_factor = min(view_height / orig_height, view_width / orig_width)
-                
-                # Calculate new dimensions
-                new_width = int(orig_width * scale_factor)
-                new_height = int(orig_height * scale_factor)
-                
-                # Make sure new dimensions don't exceed view
-                if new_height > view_height or new_width > view_width:
-                    scale_factor = min(view_height / orig_height, view_width / orig_width) * 0.9  # 10% margin
-                    new_width = int(orig_width * scale_factor)
-                    new_height = int(orig_height * scale_factor)
+                # # Make sure new dimensions don't exceed view
+                # if new_height > self.view_height or new_width > self.view_width:
+                #     scale_factor = min(self.view_height / self.orig_height, self.view_width / self.orig_width) * 0.9  # 10% margin
+                #     new_width = int(self.orig_width * scale_factor)
+                #     new_height = int(self.orig_height * scale_factor)
                 
                 # Resize the image
                 self.resized_image = cv2.resize(
@@ -140,6 +127,8 @@ class ImageMixin:
                     (new_width, new_height),
                     interpolation=cv2.INTER_LINEAR
                 )
+                print("resized here")
+                print(f'height, width {self.resized_image.shape[:2]}')
                 
                 # Clear zoom state and history
                 self.zoom_history = []
@@ -168,3 +157,17 @@ class ImageMixin:
                     self.overlay_genes()
                     
                 self.status_bar.showMessage("View reset to original")
+                
+
+    def show_downsize_message(self, downsized_path):
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Image Downsized")
+        msg.setText(
+            "Your original image is slow for loading.\n\n"
+            "A downsized image (1/4 x 1/4) has been created "
+            "for faster loading in the future.\n\n"
+            f"Saved in the same folder as:\n{downsized_path}"
+        )
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec_()
