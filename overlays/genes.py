@@ -47,6 +47,7 @@ class GenesMixin:
                 f"Error loading file {file_name}: {str(e)}")
 
     def on_gene_selected(self, gene):
+        print(f"{gene} is selected")
         if gene in self.selected_genes:
             self.status_bar.showMessage("Gene already selected, choose a different gene.")
             return
@@ -111,7 +112,8 @@ class GenesMixin:
 
     def overlay_genes(self):
         """Overlay selected genes on the current image."""
-        if self.gene_data is None or self.image is None or self.resized_image is None:
+        if self.gene_data is None or self.resized_image is None:
+            print('no data')
             return
 
         overlay_image = self.resized_image.copy()
@@ -121,6 +123,7 @@ class GenesMixin:
         filtered_data = self.gene_data[selected_gene_mask]
 
         if filtered_data.empty:
+            print('filtered data is empty')
             self.status_bar.showMessage("No selected genes to overlay.")
             if self.show_cell_centers:
                 self._draw_cell_centers(overlay_image)
@@ -134,6 +137,9 @@ class GenesMixin:
             ones = np.ones((coords.shape[0], 1))
             transformed_coords = np.dot(self.transformation_matrix, np.hstack([coords, ones]).T).T
             x_coords, y_coords = transformed_coords[:, 0], transformed_coords[:, 1]
+            x_coords, y_coords = x_coords * 0.25, y_coords * 0.25
+            print(f"[DEBUG-genes.py] x-coord range: {min(x_coords), max(x_coords)} ")
+            print(f"[DEBUG-genes.py] y-coord range: {min(y_coords), max(y_coords)} ")
         else:
             self.status_bar.showMessage("Please load a transformation matrix first.")
             return

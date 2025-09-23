@@ -11,12 +11,11 @@ class ZoomMixin:
         pixmap = self.image_label.pixmap()
         if not pixmap:
             return
-
         pixmap_rect = self.get_pixmap_rect()
         if not pixmap_rect.isValid():
             return
-        print(f'DEBUG: rubberband rect x, y{rect.x, rect.y}')
-        print(f'DEBUG: pixmap_rect.width, height {pixmap_rect.width()}, {pixmap_rect.height()}')
+        print(f'[DEBUG] rubberband rect x, y{rect.x(), rect.y()}')
+        print(f'[DEBUG] pixmap_rect.width, height {pixmap_rect.width()}, {pixmap_rect.height()}')
         normalized_rect = QRectF(
             (rect.x() - pixmap_rect.x()) / pixmap_rect.width(),
             (rect.y() - pixmap_rect.y()) / pixmap_rect.height(),
@@ -32,7 +31,7 @@ class ZoomMixin:
         )
 
         orig_height, orig_width = self.original_image.shape[:2]
-        print(f'[DEBUG]: Original Image {orig_height}, {orig_width}')
+        print(f'[DEBUG] Original Image {orig_height}, {orig_width}')
         
         if getattr(self, "current_zoom", None) is not None:
             self.zoom_history.append(self.current_zoom.copy())
@@ -110,10 +109,6 @@ class ZoomMixin:
     def reset_zoom(self):
         if self.zoom_history:
             previous_zoom = self.zoom_history.pop()
-
-            if not self.zoom_history:
-                self.do_full_reset()
-                return
 
             orig_x1, orig_y1 = previous_zoom['x_start'], previous_zoom['y_start']
             orig_x2, orig_y2 = previous_zoom['x_end'], previous_zoom['y_end']
