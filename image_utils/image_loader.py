@@ -19,26 +19,23 @@ class ImageMixin:
         if file_name:
             root, ext = os.path.splitext(file_name)
             downsized_path = f"{root}_downsizedby4{ext}"
-            print(downsized_path)
             # --- Priority 1: load downsized if already exists ---
             if os.path.exists(downsized_path):
-                print('found')
+                print('found another downsized file')
                 self.status_bar.showMessage("Loading downsized image...")
                 self.original_image = cv2.imread(downsized_path)
+            elif "_downsizedby4" in file_name:
+                print('this is a downsized file')
+                self.status_bar.showMessage("Loading downsized image...")
+                self.original_image = cv2.imread(file_name)
             else:
-                # --- Otherwise load full image ---
+                # --- Otherwise load full image and downsize---
                 self.status_bar.showMessage("Loading full image...")
                 print('loaded full image')
-                self.image = cv2.imread(file_name)
-                self.original_image = self.image.copy()
 
-                # Check if it’s huge -> downsize & save
-                if self.image.shape[0] > 10000 or self.image.shape[1] > 10000:
-                    downsized_path = self.downsize_image(file_name)  # should save file
-                    self.show_downsize_message(downsized_path)
-                    self.image = cv2.imread(downsized_path)  # switch to downsized for working
+                downsized_path = self.downsize_image(file_name)  
+                self.show_downsize_message(downsized_path)
 
-            # --- Post-load GUI reset ---
             self.reset_zoom_button.setEnabled(False)
             self.do_full_reset()
 
@@ -46,8 +43,6 @@ class ImageMixin:
                 self.overlay_genes()
 
             self.status_bar.showMessage("Image loaded successfully")
-
-  
     
     def downsize_image(self, file_path):
         # Load the original image
@@ -70,8 +65,10 @@ class ImageMixin:
         root, ext = os.path.splitext(file_path)
         downsized_path = f"{root}_downsizedby4{ext}"
         cv2.imwrite(downsized_path, downsized_image)
-
+        self.original_image = downsized_image
+        
         return downsized_path
+
 
     def display_image(self):
         if self.resized_image is not None:

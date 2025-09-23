@@ -361,7 +361,9 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         mask_indices = self.cellpose_masks[xs, ys]   # keep same indexing convention as your original code
 
         # Build lookup table (index -> cluster). Use max on the mask once.
+        # Check the time for this
         max_index = int(self.cellpose_masks.max())
+        
         lookup = np.zeros(max_index + 1, dtype=np.int32)
 
         # Only set for valid indices (ignore background 0 and out-of-range)
