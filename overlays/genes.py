@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QFileDialo
 from PyQt5.QtCore import QTimer
 import cv2
 
+
 class GenesMixin:
     def load_detected_transcripts(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -13,14 +14,14 @@ class GenesMixin:
             self.status_bar.showMessage(
                 "Loading Detected Transcripts...(this may take a while)")
             QTimer.singleShot(0, lambda: self.process_csv(file_name))
-            
+
     def load_transformation_matrix(self):
         file_name, _ = QFileDialog.getOpenFileName(
             self, "Open CSV File", "", "CSV Files (*.csv)")
         if file_name:
             self.status_bar.showMessage("Loading Transformation Matrix...")
             QTimer.singleShot(0, lambda: self.process_csv(file_name))
-            
+
     def process_csv(self, file_name):
         try:
             if "transform" in file_name.lower():
@@ -40,7 +41,7 @@ class GenesMixin:
 
                 if self.image is not None:
                     self.overlay_genes()
-                    
+
                 self.status_bar.showMessage("Gene data loaded successfully")
         except Exception as e:
             self.status_bar.showMessage(
@@ -49,10 +50,12 @@ class GenesMixin:
     def on_gene_selected(self, gene):
         print(f"{gene} is selected")
         if gene in self.selected_genes:
-            self.status_bar.showMessage("Gene already selected, choose a different gene.")
+            self.status_bar.showMessage(
+                "Gene already selected, choose a different gene.")
             return
         elif not gene:
-            self.status_bar.showMessage("Gene does not exist, choose a different gene.")
+            self.status_bar.showMessage(
+                "Gene does not exist, choose a different gene.")
             return
 
         # Generate a unique color
@@ -75,7 +78,8 @@ class GenesMixin:
         # Remove button
         remove_button = QPushButton("cancel")
         remove_button.setFixedSize(75, 25)
-        remove_button.clicked.connect(lambda _, g=gene: self.remove_gene_selection(g))
+        remove_button.clicked.connect(
+            lambda _, g=gene: self.remove_gene_selection(g))
 
         gene_widget_layout.addWidget(color_label)
         gene_widget_layout.addWidget(gene_name_label)
@@ -92,6 +96,7 @@ class GenesMixin:
         self.overlay_genes()
 
     def remove_gene_selection(self, gene):
+        print(f"[DEBUG-genes.py] removing gene {gene}")
         if gene in self.selected_genes:
             del self.selected_genes[gene]
 
@@ -108,8 +113,6 @@ class GenesMixin:
                         return
         self.overlay_genes()
 
-    
-
     def overlay_genes(self):
         """Overlay selected genes on the current image."""
         if self.gene_data is None or self.resized_image is None:
@@ -119,14 +122,17 @@ class GenesMixin:
         overlay_image = self.resized_image.copy()
 
         # Only selected genes
+        print(f"[DEBUG-genes.py] selected genes: {self.selected_genes}")
         selected_gene_mask = self.gene_data["gene"].isin(self.selected_genes)
         filtered_data = self.gene_data[selected_gene_mask]
 
         if filtered_data.empty:
             print('filtered data is empty')
             self.status_bar.showMessage("No selected genes to overlay.")
-            if self.show_cell_centers:
-                self._draw_cell_centers(overlay_image)
+            self.visible_gene_x_coords = None
+            self.visible_gene_y_coords = None
+            self.visible_gene_colors = None
+            self.update_display()
             return
 
         coords = filtered_data[["global_x", "global_y"]].to_numpy()
@@ -135,13 +141,14 @@ class GenesMixin:
         # Apply transformation
         if self.transformation_matrix is not None:
             ones = np.ones((coords.shape[0], 1))
-            transformed_coords = np.dot(self.transformation_matrix, np.hstack([coords, ones]).T).T
-            x_coords, y_coords = transformed_coords[:, 0], transformed_coords[:, 1]
+            transformed_coords = np.dot(
+                self.transformation_matrix, np.hstack([coords, ones]).T).T
+            x_coords, y_coords = transformed_coords[:,
+                                                    0], transformed_coords[:, 1]
             x_coords, y_coords = x_coords * 0.25, y_coords * 0.25
-            print(f"[DEBUG-genes.py] x-coord range: {min(x_coords), max(x_coords)} ")
-            print(f"[DEBUG-genes.py] y-coord range: {min(y_coords), max(y_coords)} ")
         else:
-            self.status_bar.showMessage("Please load a transformation matrix first.")
+            self.status_bar.showMessage(
+                "Please load a transformation matrix first.")
             return
 
         # Handle zoom/full-view scaling
@@ -178,10 +185,12 @@ class GenesMixin:
 
         # Filter valid
         h, w = overlay_image.shape[:2]
-        valid = (0 <= x_coords) & (x_coords < w) & (0 <= y_coords) & (y_coords < h)
+        valid = (0 <= x_coords) & (x_coords < w) & (
+            0 <= y_coords) & (y_coords < h)
         self.visible_gene_x_coords = x_coords[valid]
         self.visible_gene_y_coords = y_coords[valid]
         self.visible_gene_colors = colors[valid]
 
         self.update_display()
-        self.status_bar.showMessage(f"Genes overlaid: {len(self.visible_gene_x_coords)} visible points")
+        self.status_bar.showMessage(
+            f"Genes overlaid: {len(self.visible_gene_x_coords)} visible points")
