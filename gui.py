@@ -1,5 +1,15 @@
 # isort: skip
 
+from overlays.colors import ColorMixin
+from overlays.cellpose_loader import CellposeMixin
+from overlays.cell_centers import CellCentersMixin
+from overlays.genes import GenesMixin
+from image_utils.image_loader import ImageMixin
+from image_utils.zoom import ZoomMixin
+import sys
+from qtpy.QtWidgets import QApplication
+from cellpose import utils
+import cv2
 import random
 import tkinter as tk
 import numpy as np
@@ -13,22 +23,13 @@ from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDial
                             QFrame)
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
-import cv2
-from cellpose import utils
-from qtpy.QtWidgets import QApplication
-import sys
 
-#Helper functions:
-from image_utils.zoom import ZoomMixin
-from image_utils.image_loader import ImageMixin
-from overlays.genes import GenesMixin
-from overlays.cell_centers import CellCentersMixin
-from overlays.cellpose_loader import CellposeMixin
-from overlays.colors import ColorMixin
+# Helper functions:
 
 root = tk.Tk()
 screen_height = root.winfo_screenheight() - 50
 screen_width = root.winfo_screenwidth()
+
 
 class ZoomableImageLabel(QLabel):
     def __init__(self, parent=None):
@@ -39,22 +40,23 @@ class ZoomableImageLabel(QLabel):
         self.origin = QPointF()
         self.rubberband_rect = QRectF()
         self.setAlignment(Qt.AlignCenter)
-        
+
     def mousePressEvent(self, event):
         if not hasattr(self.parent, 'resized_image') or self.parent.resized_image is None:
             return
-            
+
         if event.button() == Qt.LeftButton:
             self.rubberband_active = True
             self.origin = event.pos()
             self.rubberband_rect = QRectF(self.origin, self.origin)
             self.update()
-    
+
     def mouseMoveEvent(self, event):
         if self.rubberband_active:
-            self.rubberband_rect = QRectF(self.origin, event.pos()).normalized()
+            self.rubberband_rect = QRectF(
+                self.origin, event.pos()).normalized()
             self.update()
-    
+
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.rubberband_active:
             self.rubberband_active = False
@@ -62,15 +64,16 @@ class ZoomableImageLabel(QLabel):
             if self.rubberband_rect.width() > 10 and self.rubberband_rect.height() > 10:
                 self.parent.zoom_to_selection(self.rubberband_rect)
             self.update()
-    
+
     def paintEvent(self, event):
         super().paintEvent(event)
-        
+
         if self.rubberband_active:
             painter = QPainter(self)
             pen = QPen(Qt.red, 2, Qt.DashLine)
             painter.setPen(pen)
             painter.drawRect(self.rubberband_rect)
+
 
 class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageMixin, GenesMixin, ColorMixin):
     def __init__(self):
@@ -79,7 +82,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.setGeometry(0, 0, screen_width, screen_height)
         self.screenWidth = screen_width
         self.screenHeight = screen_height
-        
+
         # Central Widget
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -96,18 +99,21 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Toolbar Area
         self.toolbar_area = QWidget()
         self.toolbar_layout = QVBoxLayout(self.toolbar_area)
-        
+
         # Cellpose Mask Toggle Button
         self.toggle_cellpose_button = QPushButton("Show Cellpose Masks")
         self.toggle_cellpose_button.setCheckable(True)
         self.toggle_cellpose_button.clicked.connect(self.toggle_cellpose_masks)
-        self.toggle_cellpose_button.setEnabled(False)  # Initially disabled until masks are loaded
+        # Initially disabled until masks are loaded
+        self.toggle_cellpose_button.setEnabled(False)
         self.toolbar_layout.addWidget(self.toggle_cellpose_button)
 
         # Cellpose Outline Toggle Button
-        self.toggle_cellpose_outline_button = QPushButton("Show Cellpose Outlines")
+        self.toggle_cellpose_outline_button = QPushButton(
+            "Show Cellpose Outlines")
         self.toggle_cellpose_outline_button.setCheckable(True)
-        self.toggle_cellpose_outline_button.clicked.connect(self.toggle_cellpose_outlines)
+        self.toggle_cellpose_outline_button.clicked.connect(
+            self.toggle_cellpose_outlines)
         self.toggle_cellpose_outline_button.setEnabled(False)
         self.toolbar_layout.addWidget(self.toggle_cellpose_outline_button)
 
@@ -130,18 +136,19 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Zoom Controls
         self.zoom_controls_frame = QFrame()
         self.zoom_controls_layout = QVBoxLayout(self.zoom_controls_frame)
-        
+
         self.zoom_label = QLabel("Zoom Instructions:")
-        self.zoom_instructions = QLabel("Click and drag to select an area to zoom into")
+        self.zoom_instructions = QLabel(
+            "Click and drag to select an area to zoom into")
         self.zoom_controls_layout.addWidget(self.zoom_label)
         self.zoom_controls_layout.addWidget(self.zoom_instructions)
-        
+
         # Reset Zoom Button
         self.reset_zoom_button = QPushButton("Reset Zoom")
         self.reset_zoom_button.clicked.connect(self.reset_zoom)
         self.reset_zoom_button.setEnabled(False)
         self.zoom_controls_layout.addWidget(self.reset_zoom_button)
-        
+
         self.toolbar_layout.addWidget(self.zoom_controls_frame)
 
         # Gene Selection Dropdown
@@ -149,7 +156,8 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.gene_dropdown.setPlaceholderText("Select a Gene")
         self.gene_dropdown.currentTextChanged.connect(self.on_gene_selected)
         self.toolbar_layout.addWidget(self.gene_dropdown)
-        self.gene_dropdown.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.gene_dropdown.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents)
 
         # Selected Genes Scroll Area
         self.selected_genes_scroll = QScrollArea()
@@ -158,18 +166,21 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.selected_genes_scroll.setWidget(self.selected_genes_widget)
         self.selected_genes_scroll.setWidgetResizable(True)
         self.toolbar_layout.addWidget(self.selected_genes_scroll)
-        
+
         # cluster Selection Dropdown
         self.cluster_dropdown = QComboBox()
         self.cluster_dropdown.setPlaceholderText("Select a Cluster")
-        self.cluster_dropdown.currentTextChanged.connect(self.on_cluster_selected)
+        self.cluster_dropdown.currentTextChanged.connect(
+            self.on_cluster_selected)
         self.toolbar_layout.addWidget(self.cluster_dropdown)
-        self.cluster_dropdown.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cluster_dropdown.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents)
 
         # Selected clusters Scroll Area
         self.selected_clusters_scroll = QScrollArea()
         self.selected_clusters_widget = QWidget()
-        self.selected_clusters_layout = QVBoxLayout(self.selected_clusters_widget)
+        self.selected_clusters_layout = QVBoxLayout(
+            self.selected_clusters_widget)
         self.selected_clusters_scroll.setWidget(self.selected_clusters_widget)
         self.selected_clusters_scroll.setWidgetResizable(True)
         self.toolbar_layout.addWidget(self.selected_clusters_scroll)
@@ -188,23 +199,28 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.file_menu.addAction(self.load_image_action)
 
         # Other menu items...
-        self.load_detected_transcripts_action = QAction("Load Detected Transcripts", self)
-        self.load_detected_transcripts_action.triggered.connect(self.load_detected_transcripts)
+        self.load_detected_transcripts_action = QAction(
+            "Load Detected Transcripts", self)
+        self.load_detected_transcripts_action.triggered.connect(
+            self.load_detected_transcripts)
         self.file_menu.addAction(self.load_detected_transcripts_action)
 
-        self.load_transformation_matrix_action = QAction("Load Transformation Matrix", self)
-        self.load_transformation_matrix_action.triggered.connect(self.load_transformation_matrix)
+        self.load_transformation_matrix_action = QAction(
+            "Load Transformation Matrix", self)
+        self.load_transformation_matrix_action.triggered.connect(
+            self.load_transformation_matrix)
         self.file_menu.addAction(self.load_transformation_matrix_action)
-        
+
         self.load_anndata_action = QAction('Load Anndata Cell Centers', self)
         self.load_anndata_action.triggered.connect(self.load_anndata)
         self.file_menu.addAction(self.load_anndata_action)
 
         # Load Cellpose Masks Action
         self.load_cellpose_masks_action = QAction('Load Cellpose Masks', self)
-        self.load_cellpose_masks_action.triggered.connect(self.load_cellpose_masks)
+        self.load_cellpose_masks_action.triggered.connect(
+            self.load_cellpose_masks)
         self.file_menu.addAction(self.load_cellpose_masks_action)
-        
+
         # Cell centers
         self.cell_centers_frame = QFrame()
         self.cell_centers_layout = QVBoxLayout(self.cell_centers_frame)
@@ -213,11 +229,11 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.cell_centers_layout.addWidget(self.cell_centers_label)
         self.toggle_cell_centers_button = QPushButton("Show Cell Centers")
         self.toggle_cell_centers_button.setCheckable(True)
-        self.toggle_cell_centers_button.clicked.connect(self.toggle_cell_centers)
+        self.toggle_cell_centers_button.clicked.connect(
+            self.toggle_cell_centers)
         self.cell_centers_layout.addWidget(self.toggle_cell_centers_button)
         self.toolbar_layout.addWidget(self.cell_centers_frame)
 
-        
         # Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -238,23 +254,25 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.zoom_history = []  # Stack to track zoom levels
         self.cell_centers = None
         self.show_cell_centers = False
-        self.cell_center_color = (255, 0, 0)  # Don't know why but their color scheme is flipped
+        # Don't know why but their color scheme is flipped
+        self.cell_center_color = (255, 0, 0)
         self.cell_center_size = 2  # Default size
         self.x_coords_valid = []
         self.y_coords_valid = []
-        
+
         self.selected_clusters = {}
         self.cached_resized_mask_view = None  # cache per zoom
-    
+
     def update_display(self):
         if self.resized_image is None:
             return
         base_image = self.resized_image.copy()
         # Overlay genes
-        if hasattr(self, 'visible_gene_x_coords'):
+        if hasattr(self, 'visible_gene_x_coords') and self.visible_gene_x_coords is not None:
             for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
                 # Ensure color is a tuple of integers
-                bgr_color = tuple(int(c) for c in color[::-1])  # Reverse RGB to BGR and convert to int
+                # Reverse RGB to BGR and convert to int
+                bgr_color = tuple(int(c) for c in color[::-1])
                 cv2.circle(base_image, (x, y), 1, bgr_color, -1)
 
         # Overlay cell centers
@@ -271,20 +289,23 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Overlay cluster masks
         if self.selected_clusters is not None and self.cluster_mask is not None:
             self._draw_cluster_mask(base_image)
-        
+
         # Display final image
         overlay_image_rgb = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
         height, width, channel = overlay_image_rgb.shape
-        q_img = QImage(overlay_image_rgb.data, width, height, 3 * width, QImage.Format_RGB888)
+        q_img = QImage(overlay_image_rgb.data, width, height,
+                       3 * width, QImage.Format_RGB888)
         self.image_label.setPixmap(QPixmap.fromImage(q_img))
-        
+
     def on_cluster_selected(self, cluster):
-        
+
         if cluster in self.selected_clusters:
-            self.status_bar.showMessage("cluster already selected, choose a different cluster.")
+            self.status_bar.showMessage(
+                "cluster already selected, choose a different cluster.")
             return
         elif not cluster:
-            self.status_bar.showMessage("cluster does not exist, choose a different cluster.")
+            self.status_bar.showMessage(
+                "cluster does not exist, choose a different cluster.")
             return
 
         # generate a unique color
@@ -307,7 +328,8 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Remove button
         remove_button = QPushButton("cancel")
         remove_button.setFixedSize(75, 25)
-        remove_button.clicked.connect(lambda _, g=cluster: self.remove_cluster_selection(g))
+        remove_button.clicked.connect(
+            lambda _, g=cluster: self.remove_cluster_selection(g))
 
         cluster_widget_layout.addWidget(color_label)
         cluster_widget_layout.addWidget(cluster_name_label)
@@ -315,14 +337,15 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         cluster_widget_layout.addWidget(remove_button)
 
         # Store cluster and color
-        self.selected_clusters[cluster] = (cluster_color[0], cluster_color[1], cluster_color[2])
+        self.selected_clusters[cluster] = (
+            cluster_color[0], cluster_color[1], cluster_color[2])
 
         # Add to selected clusters layout
         self.selected_clusters_layout.addWidget(cluster_widget)
 
         # Overlay clusters
         self.update_display()
-        
+
     def remove_cluster_selection(self, cluster):
         if cluster in self.selected_clusters:
             del self.selected_clusters[cluster]
@@ -358,27 +381,29 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         ys = np.clip(ys, 0, W - 1)
 
         # Vectorized fetch of mask indices for all centers at once
-        mask_indices = self.cellpose_masks[xs, ys]   # keep same indexing convention as your original code
+        # keep same indexing convention as your original code
+        mask_indices = self.cellpose_masks[xs, ys]
 
         # Build lookup table (index -> cluster). Use max on the mask once.
         # Check the time for this
         max_index = int(self.cellpose_masks.max())
-        
+
         lookup = np.zeros(max_index + 1, dtype=np.int32)
 
         # Only set for valid indices (ignore background 0 and out-of-range)
         valid = (mask_indices > 0) & (mask_indices <= max_index)
         if np.any(valid):
             # np.put is vectorized and avoids Python loops
-            np.put(lookup, mask_indices[valid].astype(np.intp), clusters[valid].astype(np.int32))
+            np.put(lookup, mask_indices[valid].astype(
+                np.intp), clusters[valid].astype(np.int32))
 
         # Map whole mask at once
         # np.take is slightly faster and explicit about indexing
-        self.cluster_mask = np.take(lookup, self.cellpose_masks.astype(np.int32))
+        self.cluster_mask = np.take(
+            lookup, self.cellpose_masks.astype(np.int32))
 
         return
 
-        
     def _draw_cluster_mask(self, base_image):
         """
         Create a colored overlay for selected clusters and blend with base_image.
@@ -430,7 +455,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
 
         # Resize to base_image shape and blend
         resized = cv2.resize(color_crop, (base_image.shape[1], base_image.shape[0]),
-                            interpolation=cv2.INTER_NEAREST)
+                             interpolation=cv2.INTER_NEAREST)
 
         # Ensure correct dtype and in-place blending
         if resized.dtype != np.uint8:
@@ -439,8 +464,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             base_image[:] = base_image.astype(np.uint8)
 
         cv2.addWeighted(base_image, 0.5, resized, 0.5, 0, dst=base_image)
-       
-        
+
 
 if __name__ == '__main__':
     from qtpy.QtWidgets import QApplication
