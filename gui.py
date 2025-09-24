@@ -254,6 +254,9 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.zoom_history = []  # Stack to track zoom levels
         self.cell_centers = None
         self.show_cell_centers = False
+        self.visible_gene_x_coords = None
+        self.visible_gene_y_coords = None
+        self.visible_gene_colors = None
         # Don't know why but their color scheme is flipped
         self.cell_center_color = (255, 0, 0)
         self.cell_center_size = 2  # Default size
@@ -268,12 +271,23 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             return
         base_image = self.resized_image.copy()
         # Overlay genes
-        if hasattr(self, 'visible_gene_x_coords') and self.visible_gene_x_coords is not None:
-            for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
-                # Ensure color is a tuple of integers
-                # Reverse RGB to BGR and convert to int
-                bgr_color = tuple(int(c) for c in color[::-1])
-                cv2.circle(base_image, (x, y), 1, bgr_color, -1)
+        if self.selected_genes is not None:
+            if hasattr(self, 'visible_gene_x_coords') and self.visible_gene_x_coords is not None:
+                print(
+                    f"[DEBUG-gui.py] visible_gene_x_coords: {self.visible_gene_x_coords}")
+                for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
+                    # Ensure color is a tuple of integers
+                    # Reverse RGB to BGR and convert to int
+                    bgr_color = tuple(int(c) for c in color[::-1])
+                    cv2.circle(base_image, (x, y), 1, bgr_color, -1)
+            else:
+                self.filter_genes()
+                if self.visible_gene_x_coords is not None:
+                    for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
+                        # Ensure color is a tuple of integers
+                        # Reverse RGB to BGR and convert to int
+                        bgr_color = tuple(int(c) for c in color[::-1])
+                        cv2.circle(base_image, (x, y), 1, bgr_color, -1)
 
         # Overlay cell centers
         if self.show_cell_centers:
@@ -359,9 +373,9 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                         self.selected_clusters_layout.removeWidget(widget)
                         widget.hide()
                         widget.deleteLater()
-                        self.overlay_clusters()
+                        self.update_display()
                         return
-        self.overlay_clusters()
+        self.update_display()
 
     def make_cluster_data(self):
         """
