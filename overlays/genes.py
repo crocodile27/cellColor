@@ -140,7 +140,6 @@ class GenesMixin:
         self.update_display()
 
     def remove_gene_selection(self, gene):
-        print(f"[DEBUG-genes.py] removing gene {gene}")
         if gene in self.selected_genes:
             del self.selected_genes[gene]
 
@@ -167,18 +166,15 @@ class GenesMixin:
         self.visible_gene_colors = None
 
         if self.gene_data is None or self.resized_image is None:
-            print('no data')
             return
 
         overlay_image = self.resized_image.copy()
 
         # Only selected genes
-        print(f"[DEBUG-genes.py] selected genes: {self.selected_genes}")
         selected_gene_mask = self.gene_data["gene"].isin(self.selected_genes)
         filtered_data = self.gene_data[selected_gene_mask]
 
         if filtered_data.empty:
-            print('filtered data is empty')
             self.status_bar.showMessage("No selected genes to overlay.")
             # Attributes already set to None above
             return
