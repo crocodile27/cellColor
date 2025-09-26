@@ -6,14 +6,15 @@ from PyQt5.QtWidgets import QFileDialog
 from PyQt5.QtCore import QTimer
 from cellpose import utils
 
+
 class CellposeMixin:
     def _generate_outlines_and_update(self):
-
         # Derive the original mask path from the color image path if available
         if hasattr(self, 'cellpose_mask_color_image') and hasattr(self, 'cellpose_masks'):
             # Guess filename from npy file (you could store this explicitly if unsure)
             mask_shape = self.cellpose_masks.shape
-            color_image_shape = getattr(self.cellpose_mask_color_image, 'shape', None)
+            color_image_shape = getattr(
+                self.cellpose_mask_color_image, 'shape', None)
             if color_image_shape and color_image_shape[:2] == mask_shape:
                 base_path = None
                 for ext in ['_color.npy', '_masks.npy', '.npy']:
@@ -31,47 +32,56 @@ class CellposeMixin:
             base_path = None
 
         outline_path = getattr(self, 'cellpose_mask_base_path', None)
+
         if outline_path:
             outline_path += "_outlines.npy"
             if os.path.exists(outline_path):
-                self.cellpose_outlines = np.load(outline_path, allow_pickle=True).tolist()
-                
+                self.cellpose_outlines = np.load(
+                    outline_path, allow_pickle=True).tolist()
             else:
-                self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
-                
+                # This is likely where it's hanging
+                self.cellpose_outlines = utils.outlines_list(
+                    self.cellpose_masks)
+
                 # new
-                h_img, w_img = mask_shape[:2]
+                # Fixed: was mask_shape
+                h_img, w_img = self.cellpose_masks.shape[:2]
                 h_m, w_m = self.cellpose_mask_color_image.shape[:2]
                 scale_x = w_m / w_img
                 scale_y = h_m / h_img
                 scaled = []
-                for outline in self.cellpose_outlines:
+                for i, outline in enumerate(self.cellpose_outlines):
                     pts = np.array(outline)
                     # multiply then cast back to int
-                    pts_scaled = [(int(x * scale_x), int(y * scale_y)) for x, y in pts]
+                    pts_scaled = [(int(x * scale_x), int(y * scale_y))
+                                  for x, y in pts]
                     if len(pts_scaled) > 1:
                         scaled.append(pts_scaled)
                 self.cellpose_outlines = scaled
-                
-                np.save(outline_path, np.array(self.cellpose_outlines, dtype=object))
-                
+
+                np.save(outline_path, np.array(
+                    self.cellpose_outlines, dtype=object))
+
         else:
             self.cellpose_outlines = utils.outlines_list(self.cellpose_masks)
+
         self.toggle_cellpose_button.setEnabled(True)
         self.toggle_cellpose_outline_button.setEnabled(True)
-        
+
         if self.cell_centers is not None:
             self.make_cluster_button.setEnabled(True)
-        self.status_bar.showMessage("Cellpose masks loaded successfully")   
+        self.status_bar.showMessage("Cellpose masks loaded successfully")
         self.update_display()
-        
+
     def load_cellpose_masks(self):
-        
+
         if self.original_image is None:
-            self.status_bar.showMessage("Please make sure to upload an image to scale to.")
+            self.status_bar.showMessage(
+                "Please make sure to upload an image to scale to.")
             return
-        
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open Cellpose Masks", "", "NumPy Files (*.npy)")
+
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Open Cellpose Masks", "", "NumPy Files (*.npy)")
         if not file_name:
             return
 
@@ -79,11 +89,30 @@ class CellposeMixin:
             data = np.load(file_name)
 
             if isinstance(data, np.ndarray) and data.ndim == 2 and np.issubdtype(data.dtype, np.integer):
+                # Original 2D case
                 self.cellpose_masks = data
+            elif isinstance(data, np.ndarray) and data.ndim == 3:
+                # Handle 3D case - assume it's a stack of 2D masks
+                # Convert to integer if needed
+                if not np.issubdtype(data.dtype, np.integer):
+                    data = data.astype(np.int32)
 
-                num_labels = int(data.max())
+                # For 3D data, we need to decide which slice to use
+                # Let's use the slice with the most non-zero values (most cells)
+                slice_counts = [(i, np.count_nonzero(slice))
+                                for i, slice in enumerate(data)]
+                best_slice_idx = max(slice_counts, key=lambda x: x[1])[0]
+
+                self.cellpose_masks = data[best_slice_idx]
+            else:
+                raise ValueError("Unsupported mask format")
+
+            # Continue with the rest of the processing
+            if hasattr(self, 'cellpose_masks'):
+                num_labels = int(self.cellpose_masks.max())
                 rng = np.random.default_rng(42)
-                self.cellpose_colors = rng.integers(0, 255, size=(num_labels, 3), dtype=np.uint8)
+                self.cellpose_colors = rng.integers(
+                    0, 255, size=(num_labels, 3), dtype=np.uint8)
 
                 # Try to load precomputed color image
                 self.cellpose_mask_base_path = file_name.replace(".npy", "")
@@ -92,14 +121,15 @@ class CellposeMixin:
                 if os.path.exists(color_path):
                     self.cellpose_mask_color_image = np.load(color_path)
                 else:
-                    color_lut = np.vstack(([0, 0, 0], self.cellpose_colors))  # Ensure background = black
+                    # Ensure background = black
+                    color_lut = np.vstack(([0, 0, 0], self.cellpose_colors))
                     indices = self.cellpose_masks.astype(np.int32)
-                    self.cellpose_mask_color_image = color_lut[indices].astype(np.uint8)
+                    self.cellpose_mask_color_image = color_lut[indices].astype(
+                        np.uint8)
                     # Save for future use
-                
+
                 h_img, w_img = self.original_image.shape[:2]
                 # Scale the cellpose masks
-                print("before scaling cellpose mask dimension:", self.cellpose_masks.shape[:2])
                 h_cm, w_cm = self.cellpose_masks.shape[:2]
                 if (h_img, w_img) != (h_cm, w_cm):
                     self.cellpose_masks = cv2.resize(
@@ -107,8 +137,7 @@ class CellposeMixin:
                         (w_img, h_img),
                         interpolation=cv2.INTER_NEAREST
                     )
-                print("after scaling cellpose mask dimension:", self.cellpose_masks.shape[:2])
-                
+
                 # Scale the color image
                 h_m, w_m = self.cellpose_mask_color_image.shape[:2]
                 if (h_img, w_img) != (h_m, w_m):
@@ -121,26 +150,25 @@ class CellposeMixin:
                     np.save(color_path, self.cellpose_mask_color_image)
 
                 # … then queue outline generation as before …
-                self.status_bar.showMessage("Generating Cellpose outlines... this may take a moment")
+                self.status_bar.showMessage(
+                    "Generating Cellpose outlines... this may take a moment")
                 QTimer.singleShot(100, self._generate_outlines_and_update)
-            else:
-                raise ValueError("Unsupported mask format")
 
         except Exception as e:
-            print(f"Error while loading Cellpose masks: {str(e)}")
-            self.status_bar.showMessage(f"Error loading Cellpose masks: {str(e)}")
-
+            self.status_bar.showMessage(
+                f"Error loading Cellpose masks: {str(e)}")
 
     def toggle_cellpose_masks(self):
         self.show_cellpose_masks = self.toggle_cellpose_button.isChecked()
-        self.toggle_cellpose_button.setText("Hide Cellpose Masks" if self.show_cellpose_masks else "Show Cellpose Masks")
+        self.toggle_cellpose_button.setText(
+            "Hide Cellpose Masks" if self.show_cellpose_masks else "Show Cellpose Masks")
         self.update_display()
 
     def toggle_cellpose_outlines(self):
         self.show_cellpose_outlines = self.toggle_cellpose_outline_button.isChecked()
-        self.toggle_cellpose_outline_button.setText("Hide Cellpose Outlines" if self.show_cellpose_outlines else "Show Cellpose Outlines")
+        self.toggle_cellpose_outline_button.setText(
+            "Hide Cellpose Outlines" if self.show_cellpose_outlines else "Show Cellpose Outlines")
         self.update_display()
-
 
     def _draw_cellpose_mask_fill(self, image):
 
@@ -158,7 +186,8 @@ class CellposeMixin:
         if crop.size == 0:
             return
         # highlight
-        resized = cv2.resize(crop, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        resized = cv2.resize(
+            crop, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
 
         # Force both images to be np.uint8
         if resized.dtype != np.uint8:
@@ -166,8 +195,7 @@ class CellposeMixin:
         if image.dtype != np.uint8:
             image[:] = image.astype(np.uint8)
         cv2.addWeighted(image, 0.5, resized, 0.5, 0, dst=image)
-        
-            
+
     def _draw_cellpose_mask_outlines(self, image):
         if self.cellpose_outlines is None:
             return
@@ -178,8 +206,8 @@ class CellposeMixin:
             x1, y1 = zoom['x_end'], zoom['y_end']
             rect_width, rect_height = x1 - x0, y1 - y0
 
-            scale_x = image.shape[1] / rect_width 
-            scale_y = image.shape[0] / rect_height 
+            scale_x = image.shape[1] / rect_width
+            scale_y = image.shape[0] / rect_height
             for outline in self.cellpose_outlines:
                 outline = np.array(outline)
                 in_x = (outline[:, 0] >= x0) & (outline[:, 0] < x1)
@@ -190,10 +218,12 @@ class CellposeMixin:
                 outline = outline[valid]
                 outline_zoom = outline - np.array([x0, y0])
                 # apply the *same* scaling that cv2.resize used
-                outline_scaled = (outline_zoom * np.array([scale_x, scale_y])).astype(int)
+                outline_scaled = (
+                    outline_zoom * np.array([scale_x, scale_y])).astype(int)
 
                 if len(outline_scaled) > 1:
-                    cv2.polylines(image, [outline_scaled], isClosed=True, color=(0, 0, 255), thickness=1)
+                    cv2.polylines(image, [outline_scaled], isClosed=True, color=(
+                        0, 0, 255), thickness=1)
         else:
             mask_h, mask_w = self.cellpose_mask_color_image.shape[:2]
             scale_x = image.shape[1] / mask_w
@@ -202,7 +232,9 @@ class CellposeMixin:
             for outline in self.cellpose_outlines:
                 outline = np.array(outline)
                 # shift origin to (0,0)—not strictly necessary if mask coords already start at zero
-                outline_zoom = outline  
-                outline_scaled = (outline_zoom * np.array([scale_x, scale_y])).astype(int)
+                outline_zoom = outline
+                outline_scaled = (
+                    outline_zoom * np.array([scale_x, scale_y])).astype(int)
                 if len(outline_scaled) > 1:
-                    cv2.polylines(image, [outline_scaled], isClosed=True, color=(0, 0, 255), thickness=1)
+                    cv2.polylines(image, [outline_scaled], isClosed=True, color=(
+                        0, 0, 255), thickness=1)

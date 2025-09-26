@@ -245,6 +245,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Data Storage
         self.cluster_mask = None
         self.image = None
+        self.cluster_to_id = None
         self.original_image = None
         self.gene_data = None
         self.cluster_data = None
@@ -273,8 +274,6 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Overlay genes
         if self.selected_genes is not None:
             if hasattr(self, 'visible_gene_x_coords') and self.visible_gene_x_coords is not None:
-                print(
-                    f"[DEBUG-gui.py] visible_gene_x_coords: {self.visible_gene_x_coords}")
                 for x, y, color in zip(self.visible_gene_x_coords, self.visible_gene_y_coords, self.visible_gene_colors):
                     # Ensure color is a tuple of integers
                     # Reverse RGB to BGR and convert to int
@@ -351,7 +350,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         cluster_widget_layout.addWidget(remove_button)
 
         # Store cluster and color
-        self.selected_clusters[cluster] = (
+        self.selected_clusters[self.cluster_to_id[cluster]] = (
             cluster_color[0], cluster_color[1], cluster_color[2])
 
         # Add to selected clusters layout
@@ -361,8 +360,11 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.update_display()
 
     def remove_cluster_selection(self, cluster):
+        print(f"[DEBUG-gui.py] removing cluster {cluster}")
+        print(f"[DEBUG-gui.py] selected_clusters: {self.selected_clusters}")
+        print(f"[DEBUG-gui.py] cluster_to_id: {self.cluster_to_id}")
         if cluster in self.selected_clusters:
-            del self.selected_clusters[cluster]
+            del self.selected_clusters[self.cluster_to_id[cluster]]
 
         for i in range(self.selected_clusters_layout.count()):
             widget = self.selected_clusters_layout.itemAt(i).widget()
@@ -382,11 +384,18 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         Vectorized mapping from cellpose mask index -> cluster id.
         Stores result in self.cluster_mask (int32).
         """
-        # Remove debug prints in production (they slow things down).
-        # Get cell center arrays and clamp to image bounds
+        self.cluster_dropdown.clear()
+        if self.cell_centers is not None and "cluster" in self.cell_centers.columns:
+            unique_clusters = pd.Series(
+                self.cell_centers["cluster"]).dropna().astype(str).unique()
+            self.cluster_dropdown.addItems(list(map(str, unique_clusters)))
+        else:
+            self.cluster_dropdown.addItem("No cluster annotations found")
+
         xs = self.cell_centers['global_x'].to_numpy().astype(np.intp)
         ys = self.cell_centers['global_y'].to_numpy().astype(np.intp)
-        clusters = self.cell_centers['cluster'].to_numpy().astype(np.int32)
+
+        clusters = self.cell_centers['cluster']
 
         H, W = self.cellpose_masks.shape
 
@@ -407,9 +416,23 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Only set for valid indices (ignore background 0 and out-of-range)
         valid = (mask_indices > 0) & (mask_indices <= max_index)
         if np.any(valid):
+            # Handle string cluster names by creating a mapping to integer IDs
+            unique_clusters = clusters[valid].unique()
+            self.cluster_to_id = {cluster: idx + 1 for idx,
+                                  cluster in enumerate(unique_clusters)}
+
+            # Convert cluster names to integer IDs
+            cluster_ids = clusters[valid].map(
+                self.cluster_to_id).astype(np.int32)
+
+            # Store the mapping for later use in cluster selection
+            self.cluster_name_to_id = self.cluster_to_id
+            self.cluster_id_to_name = {
+                v: k for k, v in self.cluster_to_id.items()}
+
             # np.put is vectorized and avoids Python loops
             np.put(lookup, mask_indices[valid].astype(
-                np.intp), clusters[valid].astype(np.int32))
+                np.intp), cluster_ids)
 
         # Map whole mask at once
         # np.take is slightly faster and explicit about indexing
@@ -444,7 +467,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
 
         # If only a few clusters are selected and mask_crop is large,
         # using boolean assignment per-cluster can be faster/memory-savvier than building a huge colors_lookup.
-        sel_ids = [int(k) for k in self.selected_clusters.keys()]
+        sel_ids = [k for k in self.selected_clusters.keys()]
 
         # Strategy A: vectorized lookup for compact max cluster id (fast if max cluster id small)
         max_cluster_id = int(mask_crop.max())

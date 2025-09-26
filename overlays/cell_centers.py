@@ -131,7 +131,8 @@ class CellCentersMixin:
                 return
 
             # --- Extract cluster/type columns ---
-            potential_cluster_cols = ["leiden", "cluster", "type", "celltype"]
+            potential_cluster_cols = [
+                "leiden", "cluster", "type", "celltype", "class"]
             cluster_cols = [
                 col for col in adata.obs.columns if col.lower() in potential_cluster_cols]
             cluster_series = None
@@ -176,16 +177,6 @@ class CellCentersMixin:
 
             # --- Populate dropdown with available unique clusters ---
             if self.cellpose_masks is not None:
-                self.cluster_dropdown.clear()
-                if selected_cluster_col is not None and "cluster" in self.cell_centers.columns:
-                    unique_clusters = pd.Series(
-                        self.cell_centers["cluster"]).dropna().astype(str).unique()
-                    # Ensure list of strings for the dropdown
-                    self.cluster_dropdown.addItems(
-                        list(map(str, unique_clusters)))
-                else:
-                    self.cluster_dropdown.addItem(
-                        "No cluster annotations found")
                 self.make_cluster_button.setEnabled(True)
 
             # Enable the cell centers button
