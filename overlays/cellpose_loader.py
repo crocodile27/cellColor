@@ -68,8 +68,9 @@ class CellposeMixin:
         self.toggle_cellpose_button.setEnabled(True)
         self.toggle_cellpose_outline_button.setEnabled(True)
 
-        if self.cell_centers is not None:
-            self.make_cluster_button.setEnabled(True)
+        if self.cell_centers is not None:            # Enable the cluster button
+            # Automatically create cluster masks if both cell_centers and cellpose_masks are available
+            self.make_cluster_data()
         self.status_bar.showMessage("Cellpose masks loaded successfully")
         self.update_display()
 

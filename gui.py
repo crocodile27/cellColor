@@ -15,11 +15,13 @@ import tkinter as tk
 import numpy as np
 import pandas as pd
 import anndata as ad
+import os
+import glob
 
 from qtpy.QtCore import Qt, QTimer, QRectF, QPointF
 from qtpy.QtGui import QImage, QPixmap, QPainter, QPen
 from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDialog, QAction, QStatusBar, QToolBar,
-                            QComboBox, QHBoxLayout, QPushButton, QScrollArea,
+                            QComboBox, QHBoxLayout, QPushButton, QScrollArea, QMessageBox,
                             QFrame)
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
@@ -100,39 +102,6 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.toolbar_area = QWidget()
         self.toolbar_layout = QVBoxLayout(self.toolbar_area)
 
-        # Cellpose Mask Toggle Button
-        self.toggle_cellpose_button = QPushButton("Show Cellpose Masks")
-        self.toggle_cellpose_button.setCheckable(True)
-        self.toggle_cellpose_button.clicked.connect(self.toggle_cellpose_masks)
-        # Initially disabled until masks are loaded
-        self.toggle_cellpose_button.setEnabled(False)
-        self.toolbar_layout.addWidget(self.toggle_cellpose_button)
-
-        # Cellpose Outline Toggle Button
-        self.toggle_cellpose_outline_button = QPushButton(
-            "Show Cellpose Outlines")
-        self.toggle_cellpose_outline_button.setCheckable(True)
-        self.toggle_cellpose_outline_button.clicked.connect(
-            self.toggle_cellpose_outlines)
-        self.toggle_cellpose_outline_button.setEnabled(False)
-        self.toolbar_layout.addWidget(self.toggle_cellpose_outline_button)
-
-        # Make Cluster Button
-        self.make_cluster_button = QPushButton("Make Cluster Masks")
-        self.make_cluster_button.setCheckable(True)
-        self.make_cluster_button.clicked.connect(self.make_cluster_data)
-        self.make_cluster_button.setEnabled(False)
-        self.toolbar_layout.addWidget(self.make_cluster_button)
-
-        # Outline visibility state
-        self.show_cellpose_outlines = False
-
-        # Data storage
-        self.cellpose_masks = None
-        self.cellpose_colors = None
-        self.cellpose_outlines = None
-        self.show_cellpose_masks = False
-
         # Zoom Controls
         self.zoom_controls_frame = QFrame()
         self.zoom_controls_layout = QVBoxLayout(self.zoom_controls_frame)
@@ -199,40 +168,69 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.file_menu.addAction(self.load_image_action)
 
         # Other menu items...
-        self.load_detected_transcripts_action = QAction(
-            "Load Detected Transcripts", self)
-        self.load_detected_transcripts_action.triggered.connect(
-            self.load_detected_transcripts)
-        self.file_menu.addAction(self.load_detected_transcripts_action)
+        # self.load_detected_transcripts_action = QAction(
+        #     "Load Detected Transcripts", self)
+        # self.load_detected_transcripts_action.triggered.connect(
+        #     self.load_detected_transcripts)
+        # self.file_menu.addAction(self.load_detected_transcripts_action)
 
-        self.load_transformation_matrix_action = QAction(
-            "Load Transformation Matrix", self)
-        self.load_transformation_matrix_action.triggered.connect(
-            self.load_transformation_matrix)
-        self.file_menu.addAction(self.load_transformation_matrix_action)
+        # self.load_transformation_matrix_action = QAction(
+        #     "Load Transformation Matrix", self)
+        # self.load_transformation_matrix_action.triggered.connect(
+        #     self.load_transformation_matrix)
+        # self.file_menu.addAction(self.load_transformation_matrix_action)
 
-        self.load_anndata_action = QAction('Load Anndata Cell Centers', self)
-        self.load_anndata_action.triggered.connect(self.load_anndata)
-        self.file_menu.addAction(self.load_anndata_action)
+        # self.load_anndata_action = QAction('Load Anndata Cell Centers', self)
+        # self.load_anndata_action.triggered.connect(self.load_anndata)
+        # self.file_menu.addAction(self.load_anndata_action)
 
-        # Load Cellpose Masks Action
-        self.load_cellpose_masks_action = QAction('Load Cellpose Masks', self)
-        self.load_cellpose_masks_action.triggered.connect(
-            self.load_cellpose_masks)
-        self.file_menu.addAction(self.load_cellpose_masks_action)
+        # # Load Cellpose Masks Action
+        # self.load_cellpose_masks_action = QAction('Load Cellpose Masks', self)
+        # self.load_cellpose_masks_action.triggered.connect(
+        #     self.load_cellpose_masks)
+        # self.file_menu.addAction(self.load_cellpose_masks_action)
+
+        # Add separator
+        self.file_menu.addSeparator()
+
+        # Auto Load Files Action
+        self.auto_load_files_action = QAction('Auto Load Files', self)
+        self.auto_load_files_action.triggered.connect(self.auto_load_files)
+        self.file_menu.addAction(self.auto_load_files_action)
 
         # Cell centers
-        self.cell_centers_frame = QFrame()
-        self.cell_centers_layout = QVBoxLayout(self.cell_centers_frame)
-
-        self.cell_centers_label = QLabel("Cell Centers:")
-        self.cell_centers_layout.addWidget(self.cell_centers_label)
         self.toggle_cell_centers_button = QPushButton("Show Cell Centers")
         self.toggle_cell_centers_button.setCheckable(True)
         self.toggle_cell_centers_button.clicked.connect(
             self.toggle_cell_centers)
-        self.cell_centers_layout.addWidget(self.toggle_cell_centers_button)
-        self.toolbar_layout.addWidget(self.cell_centers_frame)
+        self.toggle_cell_centers_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.toggle_cell_centers_button)
+
+        # Cellpose Mask Toggle Button
+        self.toggle_cellpose_button = QPushButton("Show Cellpose Masks")
+        self.toggle_cellpose_button.setCheckable(True)
+        self.toggle_cellpose_button.clicked.connect(self.toggle_cellpose_masks)
+        # Initially disabled until masks are loaded
+        self.toggle_cellpose_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.toggle_cellpose_button)
+
+        # Cellpose Outline Toggle Button
+        self.toggle_cellpose_outline_button = QPushButton(
+            "Show Cellpose Outlines")
+        self.toggle_cellpose_outline_button.setCheckable(True)
+        self.toggle_cellpose_outline_button.clicked.connect(
+            self.toggle_cellpose_outlines)
+        self.toggle_cellpose_outline_button.setEnabled(False)
+        self.toolbar_layout.addWidget(self.toggle_cellpose_outline_button)
+
+        # Outline visibility state
+        self.show_cellpose_outlines = False
+
+        # Data storage
+        self.cellpose_masks = None
+        self.cellpose_colors = None
+        self.cellpose_outlines = None
+        self.show_cellpose_masks = False
 
         # Status Bar
         self.status_bar = QStatusBar()
@@ -258,11 +256,16 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.visible_gene_x_coords = None
         self.visible_gene_y_coords = None
         self.visible_gene_colors = None
+        self.cell_center_x_coords = None
+        self.cell_center_y_coords = None
+        self.cell_center_colors = None
         # Don't know why but their color scheme is flipped
         self.cell_center_color = (255, 0, 0)
         self.cell_center_size = 2  # Default size
         self.x_coords_valid = []
         self.y_coords_valid = []
+        self.region = None
+        self.run = None
 
         self.selected_clusters = {}
         self.cached_resized_mask_view = None  # cache per zoom
@@ -312,13 +315,25 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
 
     def on_cluster_selected(self, cluster):
 
-        if cluster in self.selected_clusters:
+        # Check if cluster is already selected (using cluster_id as key)
+        if cluster in self.cluster_to_id and self.cluster_to_id[cluster] in self.selected_clusters:
             self.status_bar.showMessage(
                 "cluster already selected, choose a different cluster.")
             return
         elif not cluster:
             self.status_bar.showMessage(
                 "cluster does not exist, choose a different cluster.")
+            return
+
+        # Check if cluster exists in cluster_to_id mapping
+        if not hasattr(self, 'cluster_to_id') or self.cluster_to_id is None:
+            self.status_bar.showMessage(
+                "No cluster mapping available. Please create cluster masks first.")
+            return
+
+        if cluster not in self.cluster_to_id:
+            self.status_bar.showMessage(
+                f"Cluster '{cluster}' not found in current data. Available clusters: {list(self.cluster_to_id.keys())}")
             return
 
         # generate a unique color
@@ -350,8 +365,9 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         cluster_widget_layout.addWidget(remove_button)
 
         # Store cluster and color
-        self.selected_clusters[self.cluster_to_id[cluster]] = (
-            cluster_color[0], cluster_color[1], cluster_color[2])
+        cluster_id = self.cluster_to_id[cluster]
+        self.selected_clusters[cluster_id] = (
+            cluster_color[2], cluster_color[1], cluster_color[0])
 
         # Add to selected clusters layout
         self.selected_clusters_layout.addWidget(cluster_widget)
@@ -360,12 +376,14 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.update_display()
 
     def remove_cluster_selection(self, cluster):
-        print(f"[DEBUG-gui.py] removing cluster {cluster}")
-        print(f"[DEBUG-gui.py] selected_clusters: {self.selected_clusters}")
-        print(f"[DEBUG-gui.py] cluster_to_id: {self.cluster_to_id}")
-        if cluster in self.selected_clusters:
-            del self.selected_clusters[self.cluster_to_id[cluster]]
 
+        # Check if cluster exists in cluster_to_id mapping
+        if cluster in self.cluster_to_id:
+            cluster_id = self.cluster_to_id[cluster]
+            if cluster_id in self.selected_clusters:
+                del self.selected_clusters[cluster_id]
+
+        # Remove the widget from the UI
         for i in range(self.selected_clusters_layout.count()):
             widget = self.selected_clusters_layout.itemAt(i).widget()
             if widget:
@@ -377,11 +395,13 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                         widget.deleteLater()
                         self.update_display()
                         return
+
         self.update_display()
 
     def make_cluster_data(self):
         """
-        Vectorized mapping from cellpose mask index -> cluster id.
+        Efficient mapping from cellpose mask index -> cluster id using cell_id.
+        Uses cell_id to mask_id direct mapping for one-pass mask creation.
         Stores result in self.cluster_mask (int32).
         """
         self.cluster_dropdown.clear()
@@ -392,9 +412,110 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         else:
             self.cluster_dropdown.addItem("No cluster annotations found")
 
+        # Try to load cached cluster mask and mappings for faster startup
+        try:
+            # Base path from cellpose masks if available; otherwise fall back to original image path
+            cache_base = None
+            if hasattr(self, 'cellpose_mask_base_path') and self.cellpose_mask_base_path:
+                cache_base = self.cellpose_mask_base_path
+            elif hasattr(self, 'original_image_path') and self.original_image_path:
+                cache_base = os.path.splitext(self.original_image_path)[0]
+
+            if cache_base is not None:
+                cluster_mask_path = cache_base + "_cluster_mask.npy"
+                cluster_map_path = cache_base + "_cluster_map.csv"
+                if os.path.exists(cluster_mask_path) and os.path.exists(cluster_map_path):
+                    loaded_mask = np.load(cluster_mask_path)
+                    # Only accept if shape matches current masks (after scaling)
+                    if (hasattr(self, 'cellpose_masks') and self.cellpose_masks is not None and
+                            loaded_mask.shape == self.cellpose_masks.shape):
+                        self.cluster_mask = loaded_mask.astype(np.int32)
+                        # Load mapping
+                        df_map = pd.read_csv(cluster_map_path)
+                        # Expect two columns: 'cluster_name','cluster_id'
+                        if {'cluster_name', 'cluster_id'}.issubset(df_map.columns):
+                            self.cluster_to_id = {
+                                row['cluster_name']: int(row['cluster_id']) for _, row in df_map.iterrows()
+                            }
+                            self.cluster_id_to_name = {
+                                int(row['cluster_id']): row['cluster_name'] for _, row in df_map.iterrows()
+                            }
+
+                            # Check if cached clusters match current clusters
+                            if 'unique_clusters' in locals():
+                                current_clusters = set(unique_clusters)
+                                cached_clusters = set(
+                                    self.cluster_to_id.keys())
+                                if current_clusters != cached_clusters:
+
+                                    # Clear the cached data and continue to regenerate
+                                    self.cluster_mask = None
+                                    self.cluster_to_id = None
+                                    self.cluster_id_to_name = None
+
+                                    # Also clear the cache files to prevent future mismatches
+                                    try:
+                                        if os.path.exists(cluster_mask_path):
+                                            os.remove(cluster_mask_path)
+                                    except Exception as e:
+                                        print(
+                                            f"Failed to remove cache files: {e}")
+                                else:
+                                    return
+                            else:
+                                return
+        except Exception as e:
+            print(f"Failed loading cached cluster mask: {e}")
+
+        # Check if we have cell_id information for efficient mapping
+        if (self.cell_centers is not None and
+            "cell_id" in self.cell_centers.columns and
+                "cluster" in self.cell_centers.columns):
+
+            # Get valid data (non-null cell_id and cluster)
+            valid_data = self.cell_centers.dropna(
+                subset=['cell_id', 'cluster'])
+
+            if len(valid_data) == 0:
+                # Fall through to coordinate-based method
+            else:
+                # Create cell_id to cluster mapping
+                cell_id_to_cluster = dict(
+                    zip(valid_data['cell_id'], valid_data['cluster']))
+
+                # Create cluster name to integer ID mapping
+                unique_clusters = valid_data['cluster'].unique()
+                self.cluster_to_id = {cluster: idx + 1 for idx,
+                                      cluster in enumerate(unique_clusters)}
+                self.cluster_id_to_name = {
+                    v: k for k, v in self.cluster_to_id.items()}
+
+                # Get max mask index for lookup table size
+                max_mask_index = int(self.cellpose_masks.max())
+                lookup = np.zeros(max_mask_index + 1, dtype=np.int32)
+
+                # Create cell_id to cluster_id mapping
+                cell_id_to_cluster_id = {}
+                for cell_id, cluster in cell_id_to_cluster.items():
+                    if cluster in self.cluster_to_id:
+                        cell_id_to_cluster_id[cell_id] = self.cluster_to_id[cluster]
+
+                # Fill lookup table using cell_id as mask_id
+                for cell_id, cluster_id in cell_id_to_cluster_id.items():
+                    if 1 <= cell_id <= max_mask_index:  # Valid mask index range
+                        lookup[cell_id] = cluster_id
+
+                # Create cluster mask by mapping cellpose_masks through lookup table
+                self.cluster_mask = np.take(
+                    lookup, self.cellpose_masks.astype(np.int32))
+
+                # Skip the fallback method if cell_id method succeeded
+                return
+
+        # Fallback to original coordinate-based method if no cell_id available or cell_id method failed
+
         xs = self.cell_centers['global_x'].to_numpy().astype(np.intp)
         ys = self.cell_centers['global_y'].to_numpy().astype(np.intp)
-
         clusters = self.cell_centers['cluster']
 
         H, W = self.cellpose_masks.shape
@@ -404,17 +525,15 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         ys = np.clip(ys, 0, W - 1)
 
         # Vectorized fetch of mask indices for all centers at once
-        # keep same indexing convention as your original code
         mask_indices = self.cellpose_masks[xs, ys]
 
         # Build lookup table (index -> cluster). Use max on the mask once.
-        # Check the time for this
         max_index = int(self.cellpose_masks.max())
-
         lookup = np.zeros(max_index + 1, dtype=np.int32)
 
         # Only set for valid indices (ignore background 0 and out-of-range)
         valid = (mask_indices > 0) & (mask_indices <= max_index)
+
         if np.any(valid):
             # Handle string cluster names by creating a mapping to integer IDs
             unique_clusters = clusters[valid].unique()
@@ -433,11 +552,35 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             # np.put is vectorized and avoids Python loops
             np.put(lookup, mask_indices[valid].astype(
                 np.intp), cluster_ids)
+        else:
+            print("No valid mask indices found in coordinate-based method")
 
         # Map whole mask at once
-        # np.take is slightly faster and explicit about indexing
         self.cluster_mask = np.take(
             lookup, self.cellpose_masks.astype(np.int32))
+
+        # Persist the computed cluster mask and mapping for faster reload next time
+        try:
+            if 'cache_base' not in locals() or cache_base is None:
+                if hasattr(self, 'cellpose_mask_base_path') and self.cellpose_mask_base_path:
+                    cache_base = self.cellpose_mask_base_path
+                elif hasattr(self, 'original_image_path') and self.original_image_path:
+                    cache_base = os.path.splitext(self.original_image_path)[0]
+            if cache_base is not None:
+                cluster_mask_path = cache_base + "_cluster_mask.npy"
+                cluster_map_path = cache_base + "_cluster_map.csv"
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(cluster_mask_path), exist_ok=True)
+                np.save(cluster_mask_path, self.cluster_mask.astype(np.int32))
+                # Save mapping
+                if hasattr(self, 'cluster_to_id') and self.cluster_to_id is not None:
+                    df_map = pd.DataFrame([
+                        {"cluster_name": k, "cluster_id": v}
+                        for k, v in self.cluster_to_id.items()
+                    ])
+                    df_map.to_csv(cluster_map_path, index=False)
+        except Exception as e:
+            print(f"Failed saving cached cluster mask: {e}")
 
         return
 
@@ -501,6 +644,206 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             base_image[:] = base_image.astype(np.uint8)
 
         cv2.addWeighted(base_image, 0.5, resized, 0.5, 0, dst=base_image)
+
+    def auto_load_files(self):
+        """
+        Automatically find and load files based on patterns:
+        1. anndata file (.h5ad)
+        2. transformation matrix (contains 'transform' in filename)
+        3. detected transcripts (contains 'detected_transcripts' in filename)
+        4. cellpose masks (.npy file, excluding outlines)
+        """
+
+        # Ask user to select a directory
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Directory to Auto Load Files From"
+        )
+
+        if not directory:
+            return
+
+        self.status_bar.showMessage("Auto loading files...")
+
+        loaded_files = []
+        errors = []
+
+        try:
+
+            # 1. Find and load transformation matrix
+            csv_files = glob.glob(os.path.join(directory, "*.csv"))
+            transform_file = None
+            for csv_file in csv_files:
+                if "transform" in os.path.basename(csv_file).lower():
+                    transform_file = csv_file
+                    break
+
+            if transform_file:
+                self.status_bar.showMessage(
+                    f"Loading transformation matrix: {os.path.basename(transform_file)}")
+                self.process_csv(transform_file)
+                loaded_files.append(
+                    f"Transformation matrix: {os.path.basename(transform_file)}")
+            else:
+                errors.append(
+                    "No transformation matrix file found (looking for 'transform' in filename)")
+            # 2. Find and load anndata file (.h5ad)
+            h5ad_files = glob.glob(os.path.join(directory, "*.h5ad"))
+            if h5ad_files:
+                if len(h5ad_files) == 1:
+                    anndata_file = h5ad_files[0]
+                    self.status_bar.showMessage(
+                        f"Loading anndata: {os.path.basename(anndata_file)}")
+                    self.load_anndata(anndata_file)
+                    loaded_files.append(
+                        f"Anndata: {os.path.basename(anndata_file)}")
+                else:
+                    errors.append(
+                        f"Multiple .h5ad files found: {[os.path.basename(f) for f in h5ad_files]}")
+            else:
+                errors.append("No .h5ad files found")
+
+            # 3. Find and load detected transcripts
+            transcripts_file = None
+            for csv_file in csv_files:
+                if "detected_transcripts" in os.path.basename(csv_file).lower():
+                    transcripts_file = csv_file
+                    break
+
+            if transcripts_file:
+                self.status_bar.showMessage(
+                    f"Loading detected transcripts: {os.path.basename(transcripts_file)}")
+                self.process_gene_data(transcripts_file)
+                loaded_files.append(
+                    f"Detected transcripts: {os.path.basename(transcripts_file)}")
+            else:
+                errors.append(
+                    "No detected transcripts file found (looking for 'detected_transcripts' in filename)")
+
+            # 4. Find and load cellpose masks (.npy, excluding outlines)
+            npy_files = glob.glob(os.path.join(directory, "*.npy"))
+            masks_file = None
+            for npy_file in npy_files:
+                filename = os.path.basename(npy_file)
+                if "outlines" not in filename.lower():
+                    masks_file = npy_file
+                    break
+
+            if masks_file:
+                self.status_bar.showMessage(
+                    f"Loading cellpose masks: {os.path.basename(masks_file)}")
+                # Load the masks directly using the existing logic
+                self._load_cellpose_masks_from_path(masks_file)
+                loaded_files.append(
+                    f"Cellpose masks: {os.path.basename(masks_file)}")
+            else:
+                errors.append(
+                    "No cellpose masks file found (looking for .npy file without 'outlines' in name)")
+
+            # Show results
+            if loaded_files:
+                success_msg = "Successfully loaded:\n" + \
+                    "\n".join(loaded_files)
+                if errors:
+                    success_msg += "\n\nErrors:\n" + "\n".join(errors)
+
+                QMessageBox.information(
+                    self, "Auto Load Complete", success_msg)
+                self.status_bar.showMessage("Auto load completed")
+            else:
+                QMessageBox.warning(
+                    self, "Auto Load Failed", "No files were loaded.\n\n" + "\n".join(errors))
+                self.status_bar.showMessage("Auto load failed")
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Auto Load Error", f"An error occurred during auto loading:\n{str(e)}")
+            self.status_bar.showMessage("Auto load error")
+
+    def _load_cellpose_masks_from_path(self, file_path):
+        """
+        Load cellpose masks from a specific file path (extracted from load_cellpose_masks)
+        """
+        try:
+            data = np.load(file_path)
+
+            if isinstance(data, np.ndarray) and data.ndim == 2 and np.issubdtype(data.dtype, np.integer):
+                # Original 2D case
+                self.cellpose_masks = data
+            elif isinstance(data, np.ndarray) and data.ndim == 3:
+                # Handle 3D case - assume it's a stack of 2D masks
+                # Convert to integer if needed
+                if not np.issubdtype(data.dtype, np.integer):
+                    data = data.astype(np.int32)
+
+                # For 3D data, we need to decide which slice to use
+                # Let's use the slice with the most non-zero values (most cells)
+                slice_counts = [(i, np.count_nonzero(slice))
+                                for i, slice in enumerate(data)]
+                best_slice_idx = max(slice_counts, key=lambda x: x[1])[0]
+
+                self.cellpose_masks = data[best_slice_idx]
+            else:
+                raise ValueError("Unsupported mask format")
+
+            # Continue with the rest of the processing
+            if hasattr(self, 'cellpose_masks'):
+                num_labels = int(self.cellpose_masks.max())
+                rng = np.random.default_rng(42)
+                self.cellpose_colors = rng.integers(
+                    0, 255, size=(num_labels, 3), dtype=np.uint8)
+
+                # Try to load precomputed color image
+                self.cellpose_mask_base_path = file_path.replace(".npy", "")
+                color_path = self.cellpose_mask_base_path + "_color.npy"
+                outline_path = self.cellpose_mask_base_path + "_outlines.npy"
+                if os.path.exists(color_path):
+                    self.cellpose_mask_color_image = np.load(color_path)
+                else:
+                    # Ensure background = black
+                    color_lut = np.vstack(([0, 0, 0], self.cellpose_colors))
+                    indices = self.cellpose_masks.astype(np.int32)
+                    self.cellpose_mask_color_image = color_lut[indices].astype(
+                        np.uint8)
+                    # Save for future use
+
+                h_img, w_img = self.original_image.shape[:2]
+                # Scale the cellpose masks
+                h_cm, w_cm = self.cellpose_masks.shape[:2]
+                if (h_img, w_img) != (h_cm, w_cm):
+                    self.cellpose_masks = cv2.resize(
+                        self.cellpose_masks,
+                        (w_img, h_img),
+                        interpolation=cv2.INTER_NEAREST
+                    )
+
+                # Scale the color image
+                h_m, w_m = self.cellpose_mask_color_image.shape[:2]
+                if (h_img, w_img) != (h_m, w_m):
+                    self.cellpose_mask_color_image = cv2.resize(
+                        self.cellpose_mask_color_image,
+                        (w_img, h_img),
+                        interpolation=cv2.INTER_NEAREST
+                    )
+                    # overwrite cache so next load is already scaled
+                    np.save(color_path, self.cellpose_mask_color_image)
+
+                # Enable buttons
+                self.toggle_cellpose_button.setEnabled(True)
+                self.toggle_cellpose_outline_button.setEnabled(True)
+
+                # Automatically create cluster masks if both cell_centers and cellpose_masks are available
+                if self.cell_centers is not None:
+                    self.make_cluster_data()
+
+                # Queue outline generation
+                self.status_bar.showMessage(
+                    "Generating Cellpose outlines... this may take a moment")
+                QTimer.singleShot(100, self._generate_outlines_and_update)
+
+        except Exception as e:
+            self.status_bar.showMessage(
+                f"Error loading Cellpose masks: {str(e)}")
+            raise
 
 
 if __name__ == '__main__':
