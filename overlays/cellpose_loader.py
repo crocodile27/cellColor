@@ -75,7 +75,7 @@ class CellposeMixin:
         self.update_display()
 
     def load_cellpose_masks(self):
-
+        """Load Cellpose masks - used internally by auto_load_files"""
         if self.original_image is None:
             self.status_bar.showMessage(
                 "Please make sure to upload an image to scale to.")
@@ -86,78 +86,7 @@ class CellposeMixin:
         if not file_name:
             return
 
-        try:
-            data = np.load(file_name)
-
-            if isinstance(data, np.ndarray) and data.ndim == 2 and np.issubdtype(data.dtype, np.integer):
-                # Original 2D case
-                self.cellpose_masks = data
-            elif isinstance(data, np.ndarray) and data.ndim == 3:
-                # Handle 3D case - assume it's a stack of 2D masks
-                # Convert to integer if needed
-                if not np.issubdtype(data.dtype, np.integer):
-                    data = data.astype(np.int32)
-
-                # For 3D data, we need to decide which slice to use
-                # Let's use the slice with the most non-zero values (most cells)
-                slice_counts = [(i, np.count_nonzero(slice))
-                                for i, slice in enumerate(data)]
-                best_slice_idx = max(slice_counts, key=lambda x: x[1])[0]
-
-                self.cellpose_masks = data[best_slice_idx]
-            else:
-                raise ValueError("Unsupported mask format")
-
-            # Continue with the rest of the processing
-            if hasattr(self, 'cellpose_masks'):
-                num_labels = int(self.cellpose_masks.max())
-                rng = np.random.default_rng(42)
-                self.cellpose_colors = rng.integers(
-                    0, 255, size=(num_labels, 3), dtype=np.uint8)
-
-                # Try to load precomputed color image
-                self.cellpose_mask_base_path = file_name.replace(".npy", "")
-                color_path = self.cellpose_mask_base_path + "_color.npy"
-                outline_path = self.cellpose_mask_base_path + "_outlines.npy"
-                if os.path.exists(color_path):
-                    self.cellpose_mask_color_image = np.load(color_path)
-                else:
-                    # Ensure background = black
-                    color_lut = np.vstack(([0, 0, 0], self.cellpose_colors))
-                    indices = self.cellpose_masks.astype(np.int32)
-                    self.cellpose_mask_color_image = color_lut[indices].astype(
-                        np.uint8)
-                    # Save for future use
-
-                h_img, w_img = self.original_image.shape[:2]
-                # Scale the cellpose masks
-                h_cm, w_cm = self.cellpose_masks.shape[:2]
-                if (h_img, w_img) != (h_cm, w_cm):
-                    self.cellpose_masks = cv2.resize(
-                        self.cellpose_masks,
-                        (w_img, h_img),
-                        interpolation=cv2.INTER_NEAREST
-                    )
-
-                # Scale the color image
-                h_m, w_m = self.cellpose_mask_color_image.shape[:2]
-                if (h_img, w_img) != (h_m, w_m):
-                    self.cellpose_mask_color_image = cv2.resize(
-                        self.cellpose_mask_color_image,
-                        (w_img, h_img),
-                        interpolation=cv2.INTER_NEAREST
-                    )
-                    # overwrite cache so next load is already scaled
-                    np.save(color_path, self.cellpose_mask_color_image)
-
-                # … then queue outline generation as before …
-                self.status_bar.showMessage(
-                    "Generating Cellpose outlines... this may take a moment")
-                QTimer.singleShot(100, self._generate_outlines_and_update)
-
-        except Exception as e:
-            self.status_bar.showMessage(
-                f"Error loading Cellpose masks: {str(e)}")
+        self._load_cellpose_masks_from_path(file_name)
 
     def toggle_cellpose_masks(self):
         self.show_cellpose_masks = self.toggle_cellpose_button.isChecked()
