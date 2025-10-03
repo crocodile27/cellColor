@@ -9,17 +9,21 @@ import pyarrow.parquet as pq
 
 
 class GenesMixin:
-    def load_detected_transcripts(self):
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Open Data File", "", "All Supported Files (*.csv *.parquet);;CSV Files (*.csv);;Parquet Files (*.parquet)")
+    def load_detected_transcripts(self, file_name=None):
+        """Load detected transcripts - used internally by auto_load_files"""
+        if file_name is None:
+            file_name, _ = QFileDialog.getOpenFileName(
+                self, "Open Data File", "", "All Supported Files (*.csv *.parquet);;CSV Files (*.csv);;Parquet Files (*.parquet)")
         if file_name:
             self.status_bar.showMessage(
                 "Loading Detected Transcripts...")
             QTimer.singleShot(0, lambda: self.process_gene_data(file_name))
 
-    def load_transformation_matrix(self):
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Open CSV File", "", "CSV Files (*.csv)")
+    def load_transformation_matrix(self, file_name=None):
+        """Load transformation matrix - used internally by auto_load_files"""
+        if file_name is None:
+            file_name, _ = QFileDialog.getOpenFileName(
+                self, "Open CSV File", "", "CSV Files (*.csv)")
         if file_name:
             self.status_bar.showMessage("Loading Transformation Matrix...")
             QTimer.singleShot(0, lambda: self.process_csv(file_name))
@@ -87,11 +91,7 @@ class GenesMixin:
 
     def on_gene_selected(self, gene):
         print(f"{gene} is selected")
-        if self.transformation_matrix is None:
-            self.QMessageBox.warning(
-                self, "Missing Transformation Matrix",
-                "Please load transformation matrix first")
-            return
+
         if gene in self.selected_genes:
             self.status_bar.showMessage(
                 "Gene already selected, choose a different gene.")

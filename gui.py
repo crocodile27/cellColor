@@ -167,29 +167,6 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         self.load_image_action.triggered.connect(self.load_image)
         self.file_menu.addAction(self.load_image_action)
 
-        # Other menu items...
-        # self.load_detected_transcripts_action = QAction(
-        #     "Load Detected Transcripts", self)
-        # self.load_detected_transcripts_action.triggered.connect(
-        #     self.load_detected_transcripts)
-        # self.file_menu.addAction(self.load_detected_transcripts_action)
-
-        # self.load_transformation_matrix_action = QAction(
-        #     "Load Transformation Matrix", self)
-        # self.load_transformation_matrix_action.triggered.connect(
-        #     self.load_transformation_matrix)
-        # self.file_menu.addAction(self.load_transformation_matrix_action)
-
-        # self.load_anndata_action = QAction('Load Anndata Cell Centers', self)
-        # self.load_anndata_action.triggered.connect(self.load_anndata)
-        # self.file_menu.addAction(self.load_anndata_action)
-
-        # # Load Cellpose Masks Action
-        # self.load_cellpose_masks_action = QAction('Load Cellpose Masks', self)
-        # self.load_cellpose_masks_action.triggered.connect(
-        #     self.load_cellpose_masks)
-        # self.file_menu.addAction(self.load_cellpose_masks_action)
-
         # Add separator
         self.file_menu.addSeparator()
 
@@ -460,10 +437,6 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                                     except Exception as e:
                                         print(
                                             f"Failed to remove cache files: {e}")
-                                else:
-                                    return
-                            else:
-                                return
         except Exception as e:
             print(f"Failed loading cached cluster mask: {e}")
 
@@ -478,6 +451,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
 
             if len(valid_data) == 0:
                 # Fall through to coordinate-based method
+                pass
             else:
                 # Create cell_id to cluster mapping
                 cell_id_to_cluster = dict(
@@ -680,7 +654,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             if transform_file:
                 self.status_bar.showMessage(
                     f"Loading transformation matrix: {os.path.basename(transform_file)}")
-                self.process_csv(transform_file)
+                self.load_transformation_matrix(transform_file)
                 loaded_files.append(
                     f"Transformation matrix: {os.path.basename(transform_file)}")
             else:
@@ -712,7 +686,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             if transcripts_file:
                 self.status_bar.showMessage(
                     f"Loading detected transcripts: {os.path.basename(transcripts_file)}")
-                self.process_gene_data(transcripts_file)
+                self.load_detected_transcripts(transcripts_file)
                 loaded_files.append(
                     f"Detected transcripts: {os.path.basename(transcripts_file)}")
             else:

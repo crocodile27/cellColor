@@ -101,14 +101,7 @@ class CellCentersMixin:
         num_points = len(getattr(self, 'cell_center_x_coords', []))
 
     def load_anndata(self, file_name):
-        if self.transformation_matrix is None:
-            QMessageBox.warning(
-                self, "Missing Transformation Matrix",
-                "Please load transformation matrix first")
-            return
-        # file_name, _ = QFileDialog.getOpenFileName(
-        #     self, "Open Anndata File", "", "Anndata Files (*.h5ad);"
-        #     "All Files (*)")
+        """Load AnnData file - used internally by auto_load_files"""
         if file_name:
             self.status_bar.showMessage(
                 "Loading Anndata...")
