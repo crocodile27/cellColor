@@ -1,11 +1,13 @@
 # isort: skip
+import os
+os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
 
-from overlays.colors import ColorMixin
-from overlays.cellpose_loader import CellposeMixin
-from overlays.cell_centers import CellCentersMixin
-from overlays.genes import GenesMixin
-from image_utils.image_loader import ImageMixin
-from image_utils.zoom import ZoomMixin
+from .overlays.colors import ColorMixin
+from .overlays.cellpose_loader import CellposeMixin
+from .overlays.cell_centers import CellCentersMixin
+from .overlays.genes import GenesMixin
+from .image_utils.image_loader import ImageMixin
+from .image_utils.zoom import ZoomMixin
 import sys
 from qtpy.QtWidgets import QApplication
 from cellpose import utils
@@ -15,7 +17,6 @@ import tkinter as tk
 import numpy as np
 import pandas as pd
 import anndata as ad
-import os
 import glob
 
 from qtpy.QtCore import Qt, QTimer, QRectF, QPointF
@@ -23,8 +24,7 @@ from qtpy.QtGui import QImage, QPixmap, QPainter, QPen
 from qtpy.QtWidgets import (QMainWindow, QLabel, QVBoxLayout, QWidget, QFileDialog, QAction, QStatusBar, QToolBar,
                             QComboBox, QHBoxLayout, QPushButton, QScrollArea, QMessageBox,
                             QFrame)
-import os
-os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2, 40).__str__()
+
 
 # Helper functions:
 
@@ -381,12 +381,20 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         Uses cell_id to mask_id direct mapping for one-pass mask creation.
         Stores result in self.cluster_mask (int32).
         """
+        print("\n=== DEBUG: make_cluster_data started ===")
+        print(f"DEBUG: cell_centers available: {self.cell_centers is not None}")
+        if self.cell_centers is not None:
+            print(f"DEBUG: cell_centers shape: {self.cell_centers.shape}")
+            print(f"DEBUG: cell_centers columns: {list(self.cell_centers.columns)}")
+
         self.cluster_dropdown.clear()
         if self.cell_centers is not None and "cluster" in self.cell_centers.columns:
             unique_clusters = pd.Series(
                 self.cell_centers["cluster"]).dropna().astype(str).unique()
+            print(f"DEBUG: Found {len(unique_clusters)} unique clusters: {unique_clusters[:10]}")
             self.cluster_dropdown.addItems(list(map(str, unique_clusters)))
         else:
+            print("DEBUG: No cluster column found in cell_centers")
             self.cluster_dropdown.addItem("No cluster annotations found")
 
         # Try to load cached cluster mask and mappings for faster startup
@@ -441,15 +449,29 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             print(f"Failed loading cached cluster mask: {e}")
 
         # Check if we have cell_id information for efficient mapping
+        print(f"DEBUG: Checking for cell_id-based mapping...")
+        print(f"DEBUG: cellpose_masks available: {hasattr(self, 'cellpose_masks') and self.cellpose_masks is not None}")
+        if hasattr(self, 'cellpose_masks') and self.cellpose_masks is not None:
+            print(f"DEBUG: cellpose_masks shape: {self.cellpose_masks.shape}")
+            print(f"DEBUG: cellpose_masks max value: {self.cellpose_masks.max()}")
+            print(f"DEBUG: cellpose_masks unique values count: {len(np.unique(self.cellpose_masks))}")
+
         if (self.cell_centers is not None and
             "cell_id" in self.cell_centers.columns and
                 "cluster" in self.cell_centers.columns):
 
+            print("DEBUG: cell_id column found, using cell_id-based method")
             # Get valid data (non-null cell_id and cluster)
             valid_data = self.cell_centers.dropna(
                 subset=['cell_id', 'cluster'])
 
+            print(f"DEBUG: Valid data rows (non-null cell_id and cluster): {len(valid_data)}")
+            if len(valid_data) > 0:
+                print(f"DEBUG: Sample cell_ids: {valid_data['cell_id'].head().tolist()}")
+                print(f"DEBUG: cell_id range: {valid_data['cell_id'].min()} to {valid_data['cell_id'].max()}")
+
             if len(valid_data) == 0:
+                print("DEBUG: No valid cell_id data, falling through to coordinate-based method")
                 # Fall through to coordinate-based method
                 pass
             else:
@@ -483,23 +505,50 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                 self.cluster_mask = np.take(
                     lookup, self.cellpose_masks.astype(np.int32))
 
+                print(f"DEBUG: cell_id-based method succeeded")
+                print(f"DEBUG: cluster_mask shape: {self.cluster_mask.shape}")
+                print(f"DEBUG: cluster_mask unique values: {len(np.unique(self.cluster_mask))}")
                 # Skip the fallback method if cell_id method succeeded
                 return
 
         # Fallback to original coordinate-based method if no cell_id available or cell_id method failed
+        print("\n=== DEBUG: Using coordinate-based method ===")
+
+        if not hasattr(self, 'cellpose_masks') or self.cellpose_masks is None:
+            print("ERROR: cellpose_masks not loaded! Cannot create cluster data.")
+            return
+
+        if self.cell_centers is None:
+            print("ERROR: cell_centers not loaded! Cannot create cluster data.")
+            return
+
+        if 'global_x' not in self.cell_centers.columns or 'global_y' not in self.cell_centers.columns:
+            print(f"ERROR: Required columns 'global_x' and 'global_y' not found in cell_centers!")
+            print(f"Available columns: {list(self.cell_centers.columns)}")
+            return
 
         xs = self.cell_centers['global_x'].to_numpy().astype(np.intp)
         ys = self.cell_centers['global_y'].to_numpy().astype(np.intp)
         clusters = self.cell_centers['cluster']
 
+        print(f"DEBUG: Number of cell centers: {len(xs)}")
+        print(f"DEBUG: X coordinate range: {xs.min()} to {xs.max()}")
+        print(f"DEBUG: Y coordinate range: {ys.min()} to {ys.max()}")
+
         H, W = self.cellpose_masks.shape
+        print(f"DEBUG: Cellpose mask dimensions: H={H}, W={W}")
 
         # ensure coords are in bounds (clip avoids IndexError)
         xs = np.clip(xs, 0, H - 1)
         ys = np.clip(ys, 0, W - 1)
 
+        print(f"DEBUG: After clipping - X range: {xs.min()} to {xs.max()}")
+        print(f"DEBUG: After clipping - Y range: {ys.min()} to {ys.max()}")
+
         # Vectorized fetch of mask indices for all centers at once
         mask_indices = self.cellpose_masks[xs, ys]
+        print(f"DEBUG: Mask indices at cell centers - range: {mask_indices.min()} to {mask_indices.max()}")
+        print(f"DEBUG: Number of non-zero mask indices: {np.count_nonzero(mask_indices)}")
 
         # Build lookup table (index -> cluster). Use max on the mask once.
         max_index = int(self.cellpose_masks.max())
@@ -508,9 +557,14 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         # Only set for valid indices (ignore background 0 and out-of-range)
         valid = (mask_indices > 0) & (mask_indices <= max_index)
 
+        print(f"DEBUG: Valid mask indices: {np.count_nonzero(valid)} out of {len(valid)}")
+        if np.count_nonzero(valid) > 0:
+            print(f"DEBUG: Sample valid mask indices: {mask_indices[valid][:10]}")
+
         if np.any(valid):
             # Handle string cluster names by creating a mapping to integer IDs
             unique_clusters = clusters[valid].unique()
+            print(f"DEBUG: Creating cluster mapping for {len(unique_clusters)} clusters")
             self.cluster_to_id = {cluster: idx + 1 for idx,
                                   cluster in enumerate(unique_clusters)}
 
@@ -526,8 +580,13 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
             # np.put is vectorized and avoids Python loops
             np.put(lookup, mask_indices[valid].astype(
                 np.intp), cluster_ids)
+            print(f"DEBUG: Successfully mapped {np.count_nonzero(valid)} cells to clusters")
         else:
-            print("No valid mask indices found in coordinate-based method")
+            print("ERROR: No valid mask indices found in coordinate-based method!")
+            print("This usually means:")
+            print("  1. Cell center coordinates don't align with cellpose mask coordinates")
+            print("  2. Coordinate systems are different (e.g., X/Y swapped or different scaling)")
+            print("  3. The cellpose masks are all zeros at the cell center locations")
 
         # Map whole mask at once
         self.cluster_mask = np.take(
@@ -738,15 +797,25 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
         Load cellpose masks from a specific file path (extracted from load_cellpose_masks)
         """
         try:
+            print(f"\n=== DEBUG: Loading Cellpose masks ===")
+            print(f"DEBUG: File path: {file_path}")
+
             data = np.load(file_path)
 
+            print(f"DEBUG: Loaded data shape: {data.shape}")
+            print(f"DEBUG: Loaded data dtype: {data.dtype}")
+            print(f"DEBUG: Loaded data dimensions: {data.ndim}")
+
             if isinstance(data, np.ndarray) and data.ndim == 2 and np.issubdtype(data.dtype, np.integer):
+                print("DEBUG: Processing as 2D integer mask")
                 # Original 2D case
                 self.cellpose_masks = data
             elif isinstance(data, np.ndarray) and data.ndim == 3:
+                print("DEBUG: Processing as 3D mask stack")
                 # Handle 3D case - assume it's a stack of 2D masks
                 # Convert to integer if needed
                 if not np.issubdtype(data.dtype, np.integer):
+                    print("DEBUG: Converting to int32")
                     data = data.astype(np.int32)
 
                 # For 3D data, we need to decide which slice to use
@@ -755,9 +824,16 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                                 for i, slice in enumerate(data)]
                 best_slice_idx = max(slice_counts, key=lambda x: x[1])[0]
 
+                print(f"DEBUG: Selected slice {best_slice_idx} with {slice_counts[best_slice_idx][1]} non-zero values")
                 self.cellpose_masks = data[best_slice_idx]
             else:
+                print(f"ERROR: Unsupported mask format - ndim={data.ndim}, dtype={data.dtype}")
                 raise ValueError("Unsupported mask format")
+
+            print(f"DEBUG: Cellpose masks shape: {self.cellpose_masks.shape}")
+            print(f"DEBUG: Cellpose masks dtype: {self.cellpose_masks.dtype}")
+            print(f"DEBUG: Cellpose masks value range: {self.cellpose_masks.min()} to {self.cellpose_masks.max()}")
+            print(f"DEBUG: Number of unique mask values: {len(np.unique(self.cellpose_masks))}")
 
             # Continue with the rest of the processing
             if hasattr(self, 'cellpose_masks'):
@@ -781,18 +857,29 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                     # Save for future use
 
                 h_img, w_img = self.original_image.shape[:2]
+                print(f"\nDEBUG: Scaling masks to match image...")
+                print(f"DEBUG: Original image size: {h_img}x{w_img}")
+
                 # Scale the cellpose masks
                 h_cm, w_cm = self.cellpose_masks.shape[:2]
+                print(f"DEBUG: Cellpose masks size before scaling: {h_cm}x{w_cm}")
+
                 if (h_img, w_img) != (h_cm, w_cm):
+                    print(f"DEBUG: Resizing cellpose masks from {h_cm}x{w_cm} to {h_img}x{w_img}")
                     self.cellpose_masks = cv2.resize(
                         self.cellpose_masks,
                         (w_img, h_img),
                         interpolation=cv2.INTER_NEAREST
                     )
+                    print(f"DEBUG: Cellpose masks after scaling: {self.cellpose_masks.shape}")
+                    print(f"DEBUG: Value range after scaling: {self.cellpose_masks.min()} to {self.cellpose_masks.max()}")
+                else:
+                    print("DEBUG: Cellpose masks already match image size, no scaling needed")
 
                 # Scale the color image
                 h_m, w_m = self.cellpose_mask_color_image.shape[:2]
                 if (h_img, w_img) != (h_m, w_m):
+                    print(f"DEBUG: Resizing color image from {h_m}x{w_m} to {h_img}x{w_img}")
                     self.cellpose_mask_color_image = cv2.resize(
                         self.cellpose_mask_color_image,
                         (w_img, h_img),
@@ -800,6 +887,7 @@ class MainWindow(QMainWindow, ZoomMixin, CellposeMixin, CellCentersMixin, ImageM
                     )
                     # overwrite cache so next load is already scaled
                     np.save(color_path, self.cellpose_mask_color_image)
+                    print("DEBUG: Saved scaled color image to cache")
 
                 # Enable buttons
                 self.toggle_cellpose_button.setEnabled(True)
