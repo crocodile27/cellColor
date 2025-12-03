@@ -1,0 +1,24 @@
+# Ignore Python virtual environments
+venv/
+.env/
+.venv/
+cellColor/lib/
+cellColor/bin/
+cellColor/include/
+cellColor/share/
+
+# Or ignore everything under your accidentally-added venv
+cellColor/lib/python3.11/
+
+# General Python ignores
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
