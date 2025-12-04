@@ -100,4 +100,5 @@ Files automatically loaded (upon clicking the folder and choosing open) include:
 5. **Zoom & reset:**
    Zoom into areas of interest; use _Reset Zoom_ to return to previous zoom level.
 
+For bugs & other issues email: antheaguo@berkeley.edu and kushalnimkar@berkeley.edu
 For sample data contact: kushalnimkar@berkeley.edu
