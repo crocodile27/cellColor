@@ -1,6 +1,7 @@
 # Gene Visualization Tool (`cellColor`)
 
 Can't wait for action? Watch the demo: https://youtu.be/FGlrxKn701Y
+
 Download here: https://pypi.org/project/cellColor/
 
 An interactive desktop application for visualizing **spatial transcriptomics data**, **cell segmentation masks**, **cell clustering data** and **microscopy images**.
