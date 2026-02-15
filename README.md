@@ -1,5 +1,7 @@
 # Gene Visualization Tool (`cellColor`)
 
+Can't wait for action? Watch the demo: https://youtu.be/FGlrxKn701Y
+
 An interactive desktop application for visualizing **spatial transcriptomics data**, **cell segmentation masks**, **cell clustering data** and **microscopy images**.
 Perfect for verifying cell segmentation accuracy and exploring spatial gene expression patterns.
 
